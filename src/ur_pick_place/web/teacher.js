@@ -10,8 +10,8 @@ const guidance = [
   ['Prepare your setup', 'Use the calibration for this camera and its unchanged wrist mounting. Confirm the gripper TCP against the pendant.'],
   ['Frame the whole marker', 'Keep the camera and board still during capture. Review the detected axes and quality before continuing.'],
   ['Keep the marker fixed', 'Only move the robot. Teach the final pick position and orientation, then stop before saving.'],
-  ['Return to the capture pose', 'Use the saved observation joints. The marker can move within your configured limits. Re-read for every pick.'],
-  ['Test tracking at fixed Z', 'Capture a repositioned marker, review the new target, then explicitly test a slow move at the captured TCP height. Repeat with different positions and rotations.']
+  ['Read from a clear view', 'Show the whole marker and stop. The observation pose may differ from teaching. Re-read for every pick.'],
+  ['Test marker tracking', 'Capture a repositioned marker and review all six target coordinates before requesting a slow move. Full 3D projects follow XYZ and orientation; planar projects hold capture Z.']
 ];
 function availableStep() {
   const f=state?.project?.flow||{};
@@ -101,7 +101,23 @@ function failedStep() {
 function validationPose(pose) { return pose ? pose.map((v,i)=>`${['X','Y','Z','RX','RY','RZ'][i]}: ${(i<3?v*1000:v).toFixed(i<3?2:5)} ${i<3?'mm':'rad'}`).join('\n') : ''; }
 function renderValidation(p,busy) {
   const v=dirty?null:p?.validation;
-  const fresh=v?.validation_mode==='fixed_z'&&v?.status==='captured'&&Date.now()/1000-v.timestamp>=0&&Date.now()/1000-v.timestamp<=60;
+  const full=p?.settings.motion_model==='full';
+  const mode=full?'full_pose':'fixed_z';
+  const fresh=v?.validation_mode===mode&&v?.status==='captured'&&Date.now()/1000-v.timestamp>=0&&Date.now()/1000-v.timestamp<=60;
+  $('validation-instructions').textContent=full
+    ? 'Reposition the marker and object together, or park the AGV at a different position and height. Keep the AGV stopped. From any clear camera view, stop the arm and capture. The test follows the calculated pick in X, Y, Z and orientation.'
+    : 'Reposition the marker and object together. From a clear camera view, stop the arm and capture. This planar project follows pick XY and orientation while holding the TCP Z recorded at capture.';
+  $('validation-target-title').textContent=full?'Validation target · full 3D pick pose':'Validation target · Z held at capture height';
+  $('validation-move').textContent=full?'Move to full 3D pick':'Move at fixed Z';
+  $('validation-confirmation-text').textContent=full
+    ? 'The AGV and marker/object have stayed fixed since capture. I reviewed all six target coordinates, including Z, the workspace and the clear linear path to the pick endpoint.'
+    : 'The AGV and marker/object have stayed fixed since capture. I reviewed the target, workspace and clear linear path at the captured TCP height.';
+  $('validation-motion-help').textContent=full
+    ? 'One slow linear move to the calculated pick endpoint, including Z and tool orientation. It can lower the tool to the taught endpoint; it does not search for contact or operate the gripper. The approach-height setting does not apply. Keep this tab active. Each attempt requires a fresh capture within 60 seconds.'
+    : 'One slow linear move following pick XY and orientation, holding capture Z. The approach-height setting does not apply. Keep this tab active. Each attempt requires a fresh capture within 60 seconds.';
+  $('validation-review-help').textContent=full
+    ? 'TCP agreement checks arrival at the commanded pose. Independently check the gripper position and orientation against the object to assess camera-derived accuracy.'
+    : 'TCP agreement checks motion completion. Visually check alignment at capture height; this test does not validate pick Z.';
   const canReturn=!busy&&!dirty&&connectionOK&&!!p?.observation;
   $('observation-return').disabled=!canReturn;
   $('teach-observation-return').disabled=!canReturn||!p?.flow.taught;
@@ -125,6 +141,7 @@ function renderValidation(p,busy) {
     $('validation-target-pose').textContent=validationPose(v.validation_tcp_pose_m_rad);
     const r=v.validation;
     $('validation-change').textContent=`Pick shift: ${r.shift_from_taught_mm.toFixed(2)} mm\nPick rotation: ${r.rotation_from_taught_deg.toFixed(2)}°\nMarker yaw: ${r.marker_yaw_change_deg.toFixed(2)}°`;
+    if(r.marker_height_change_mm!==undefined) $('validation-change').textContent+=`\nMarker Z change: ${r.marker_height_change_mm.toFixed(2)} mm\nMarker tilt change: ${r.marker_tilt_change_deg.toFixed(2)}°`;
     $('validation-quality').textContent=`${v.quality.frames_accepted} accepted frames · fit ${v.quality.reprojection_rmse_px.toFixed(3)} px`;
     $('validation-freshness').textContent=v.status==='captured'?(fresh?`Ready for one attempt · ${Math.max(0,Math.floor(60-(Date.now()/1000-v.timestamp)))} seconds remaining`:'Capture expired. Capture again before motion.'):'Capture used · capture again for another motion test.';
     $('validation-motion-result').textContent=v.status+(v.message?' · '+v.message:'')+(v.error?`\nTCP error: ${v.error.position_mm.toFixed(2)} mm / ${v.error.rotation_deg.toFixed(3)}°`:'')+(v.visual_result?'\nVisual alignment: '+v.visual_result:'');
@@ -195,7 +212,7 @@ async function poll() {
     const resultKey=JSON.stringify([state.completed,state.failed,state.error]);
     if(!state.busy && resultKey!==previousResult && !dirty) {
       if(state.error) message(state.error,true);
-      else if(state.completed) message({configure:'Setup ready. Continue to step 2.',capture:'Marker captured. Keep it fixed and teach the pick endpoint in step 3.',teach:'Picking position saved. Use Return to observation pose before step 4.',locate:'Fresh poses exported. Continue to step 5 to validate tracking at fixed Z.',capture_validation:'Validation capture ready. Review the target and clear path before motion.',validate_move:'Fixed-height motion completed. Check visual alignment and record the result.',return_observation:activeStep===2?'Returned to the saved observation joints. Continue to step 4 to read and export.':'Returned to the saved observation joints. Choose Capture for validation.'}[state.completed]);
+      else if(state.completed) message({configure:'Setup ready. Continue to step 2.',capture:'Marker captured. Keep it fixed and teach the pick endpoint in step 3.',teach:'Picking position saved. Use Return to observation pose before step 4.',locate:'Fresh poses exported. Continue to step 5 to validate tracking.',capture_validation:'Validation capture ready. Review the target and clear path before motion.',validate_move:state.project?.validation?.validation_mode==='full_pose'?'Full 3D motion completed. Check alignment in XYZ and orientation and record the result.':'Fixed-height motion completed. Check visual alignment and record the result.',return_observation:activeStep===2?'Returned to the saved observation joints. Continue to step 4 to read and export.':'Returned to the saved observation joints. Choose Capture for validation.'}[state.completed]);
       if(['capture','locate'].includes(state.completed)||['capture','locate'].includes(state.failed)) {
         $('capture-image').src='/api/image?v='+(++imageVersion); $('capture-image').hidden=false;
       }

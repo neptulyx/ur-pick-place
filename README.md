@@ -129,8 +129,9 @@ Open http://127.0.0.1:8766. Follow the five steps with **Next** and **Back**:
    RX/RY/RZ in rotation-vector radians. It must match the calibration TCP.
    Confirm the checkbox, then click **Check setup & continue →**.
    Under **Project & advanced settings**, choose a project folder, approach height
-   (default 100 mm) and movement limits. Use **XY + yaw** for an object on a flat
-   support, or **Full 3D pose** to follow its full pose.
+   (default 100 mm) and movement limits. **Full 3D pose** is the default: follow
+   XYZ and orientation when AGV parking changes position, height, roll, pitch or
+   yaw. **XY + yaw** is an optional mode that preserves the taught height and tilt.
 2. **Capture marker:** use the pendant to make the whole target visible, stop the
    arm, then click **Capture marker**. Review the image and detected axes.
 3. **Teach pick:** keep the marker and object fixed. Pendant-jog the gripper to
@@ -138,17 +139,20 @@ Open http://127.0.0.1:8766. Follow the five steps with **Next** and **Back**:
    marker has not moved and click **Read current TCP & save pick**. Check that
    the joint-motion path is clear, then click **Return to observation pose**.
    Return speed and workspace bounds are under Step 5’s **Test motion settings**.
-4. **Read & export:** after returning to the saved observation joints and stopping,
-   click **Read marker & export poses**. Download **Pick pose JSON**
+4. **Read & export:** show the whole marker and stop the arm. The capture pose may
+   differ from teaching; returning to the saved observation joints is optional.
+   Click **Read marker & export poses**. Download **Pick pose JSON**
    (`target.json`); the approach is above the pick along robot-base +Z.
 5. **Validation:** reposition the marker and object together within the allowed
    movement range. Set workspace bounds and speeds under **Test motion settings**.
-   Check the joint-motion path, click **Return to observation pose**, stop, then
-   click **Capture for validation**. Review the image and calculated target.
-   Confirm the marker stayed fixed and the linear path is clear, then click
-   **Move at fixed Z**. This follows the pick XY and orientation while holding
-   TCP Z at the capture height; it does not operate the gripper. The approach
-   height setting applies to exports, not this test. Keep the tab active. After
+   From any clear camera view, stop the arm and click **Capture for validation**.
+   Review the image and all six target coordinates. Confirm that the AGV and
+   marker stayed fixed and the linear path is clear, then click **Move to full
+   3D pick**. Full projects follow the calculated pick XYZ and orientation,
+   including height and tilt changes. The tool can descend to the taught endpoint;
+   this test has no contact search and does not operate the gripper. Planar
+   projects retain **Move at fixed Z**, which holds the captured TCP height.
+   The approach height setting applies to exports, not this test. Keep the tab active. After
    the move, visually check alignment and choose **Alignment looks correct** or
    **Alignment needs adjustment**.
 
@@ -162,6 +166,17 @@ alone do not establish camera accuracy. **Stop motion** stays in the header.
 To resume teaching, enter the project folder under **Project & advanced settings**
 and click **Open saved project**, then recheck the active TCP. Capturing a new
 teaching reference requires teaching the pick again.
+
+For an AGV test, teach once, then vary X, Y, Z, roll, pitch and yaw individually
+and together within the configured limits. Repark the AGV or reposition the
+marker and object rigidly together; keep the AGV stopped throughout each capture
+and movement. Use a fresh Step 5 capture at each position without replacing the
+Step 2 reference. Measure physical XYZ and orientation alignment independently
+of the robot's commanded-pose arrival check. Defaults still bound target shift
+to 100 mm, marker tilt change to 10° and tool tilt to 20° from base −Z.
+Full-pose calculations compensate Z; the planar 10 mm height-change tolerance
+does not apply in full mode. Step 5 uses the current camera capture; automatic
+camera-view refinement is tested through Robot Bench's live picking workflow.
 
 ## 6. Use the camera pick in Robot Bench
 

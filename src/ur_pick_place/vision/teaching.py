@@ -27,7 +27,7 @@ from .robot_state import ReceivePoseSource, require_stationary
 from .targets import same_target, target_from_config
 from .transforms import matrix_to_pose
 
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 
 
 def digest(path):
@@ -100,7 +100,7 @@ def defaults(repo):
                          'tcp': calibrations[0]['tcp'] if calibrations else [0.0] * 6,
                          'camera_provider': 'realsense', 'refine_before_pick': True,
                          'target': target,
-                         'motion_model': 'planar', 'approach_mm': 100.0, 'limits': asdict(Limits())}}
+                         'motion_model': 'full', 'approach_mm': 100.0, 'limits': asdict(Limits())}}
 
 
 class PreviewCamera:
@@ -318,11 +318,14 @@ class TeachingProject:
         record = dict(self._target(observation), id=uuid.uuid4().hex, status='captured',
                       marker_tcp_pose_m_rad=matrix_to_pose(observation.base_target),
                       capture_robot=observation.robot, grasp_sha256=digest(self.directory / 'grasp_pick.json'))
-        # Validation follows the calculated pick in XY/orientation at the captured
-        # TCP height. Keep the exported pick/approach poses independent of this test.
+        # Full-pose projects validate the actual pick, including Z and tilt. Keep
+        # legacy planar projects on their explicitly labelled fixed-height test.
         target = list(record['pick_tcp_pose_m_rad'])
-        target[2] = observation.robot['tcp_pose_m_rad'][2]
-        record.update(validation_mode='fixed_z', validation_tcp_pose_m_rad=target)
+        mode = 'full_pose'
+        if self.config.pick.motion_model == 'planar':
+            target[2] = observation.robot['tcp_pose_m_rad'][2]
+            mode = 'fixed_z'
+        record.update(validation_mode=mode, validation_tcp_pose_m_rad=target)
         atomic_json(self.directory / 'validation_capture.json', record)
         self.validation = record
         return record

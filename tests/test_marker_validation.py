@@ -120,9 +120,56 @@ class ValidationTests(unittest.TestCase):
     def test_old_approach_capture_requires_recapture(self):
         self.project.validation.pop('validation_mode')
         self.project.validation.pop('validation_tcp_pose_m_rad')
-        with self.assertRaisesRegex(ValueError, 'fixed-height'):
+        with self.assertRaisesRegex(ValueError, 'motion model'):
             self.service.move_validation(self.body)
         self.assertIsNone(self.service.motion_thread)
+        self.assertFalse(self.robot.moves)
+
+    def full_pose_record(self):
+        self.project.settings['motion_model'] = 'full'
+        self.project.config.pick.motion_model = 'full'
+        target = [.42, -.12, self.robot.pose[2] + .015, .12, 3.05, .08]
+        self.project.validation = dict(self.record, validation_mode='full_pose',
+            pick_tcp_pose_m_rad=list(target), validation_tcp_pose_m_rad=list(target))
+        return target
+
+    def test_full_pose_motion_follows_xyz_and_orientation(self):
+        target = self.full_pose_record()
+        self.service.move_validation(self.body)
+        self.wait_done()
+        self.assertEqual(self.service.error, '')
+        self.assertEqual(self.project.validation['status'], 'completed')
+        for actual, expected in zip(self.robot.moves[0][0], target):
+            self.assertAlmostEqual(actual, expected)
+        self.assertNotEqual(self.robot.moves[0][0][2], self.record['capture_robot']['tcp_pose_m_rad'][2])
+        with self.assertRaisesRegex(ValueError, 'fresh validation'):
+            self.service.move_validation(self.body)
+
+    def test_full_project_refuses_fixed_height_capture_before_connecting(self):
+        self.project.config.pick.motion_model = 'full'
+        with self.assertRaisesRegex(ValueError, 'motion model'):
+            self.service.move_validation(self.body)
+        self.assertIsNone(self.service.motion_thread)
+        self.assertFalse(self.robot.moves)
+
+    def test_full_pose_refuses_changed_target_on_every_axis(self):
+        for axis in range(6):
+            with self.subTest(axis=axis):
+                self.robot = ValidationRobot()
+                self.full_pose_record()
+                self.project.validation['validation_tcp_pose_m_rad'][axis] += .01
+                self.service.heartbeat()
+                self.service.move_validation(self.body)
+                self.wait_done()
+                self.assertIn('must match the calculated pick', self.service.error)
+                self.assertFalse(self.robot.moves)
+
+    def test_full_pose_height_must_fit_workspace(self):
+        target = self.full_pose_record()
+        body = dict(self.body, workspace_max_m=[.9, .9, target[2] - .005])
+        self.service.move_validation(body)
+        self.wait_done()
+        self.assertEqual(self.project.validation['status'], 'failed')
         self.assertFalse(self.robot.moves)
 
     def test_return_uses_saved_joints_and_invalidates_capture_without_changing_teaching(self):

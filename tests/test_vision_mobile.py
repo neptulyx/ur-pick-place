@@ -111,16 +111,21 @@ class MobileVisionTests(unittest.TestCase):
         events = [e[0] for e in self.world.rtde.events]
         self.assertEqual(events[:2], ['moveL', 'moveJ'])
 
-    def test_localization_across_parking_variations_at_300mm(self):
+    def test_localization_across_full_pose_parking_variations_at_300mm(self):
         from vision_sim import OBSERVE_PICK
+        from ur_pick_place.vision.transforms import rotvec_to_matrix
         model = load_taught(self.root/'grasp_pick.json')
         initial_marker = self.world.pick.copy()
         observer = Observer(self.config, self.calibration, self.world.camera, self.source,
             mover=RobotMover(self.robot), views={'pick': model.taught_view})
-        for dx, dy, yaw, joint_delta in ((-15, 10, -5, -.02), (12, -8, 3, .015), (0, 0, 0, .03)):
-            with self.subTest(dx=dx, dy=dy, yaw=yaw):
+        changes = ((-15, 10, 12, 2, -3, -5, -.02), (12, -8, -10, -2, 1, 3, .015),
+                   (0, 0, 0, 0, 0, 0, .03))
+        for dx, dy, dz, roll, pitch, yaw, joint_delta in changes:
+            with self.subTest(dx=dx, dy=dy, dz=dz, roll=roll, pitch=pitch, yaw=yaw):
                 self.world.pick = initial_marker.copy()
                 self.world.move_pick(dx, dy, yaw)
+                self.world.pick[2, 3] += dz / 1000
+                self.world.pick[:3, :3] = rotvec_to_matrix(np.radians([roll, pitch, 0])) @ self.world.pick[:3, :3]
                 self.world.rtde.moveJ([q+joint_delta for q in OBSERVE_PICK], .1, .1)
                 observed = observer.look('pick', allow_motion=True, from_current=True)
                 pose, _ = target_pose(model, observed, self.config.pick,

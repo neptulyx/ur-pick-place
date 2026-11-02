@@ -28,6 +28,11 @@ async function fetch(path,options){
  }
  if(path==='/api/validation/capture'){
   project.validation={...project.exported,id:'capture-'+Date.now(),timestamp:Date.now()/1000,status:'captured',validation_mode:'fixed_z',validation_tcp_pose_m_rad:[.4,.1,.35,0,3.14,0],marker_tcp_pose_m_rad:[.4,.1,.2,0,0,0],quality:{frames_accepted:10,reprojection_rmse_px:.2},validation:{shift_from_taught_mm:10,rotation_from_taught_deg:5,marker_yaw_change_deg:5}};
+  if(settings.motion_model==='full') {
+   project.validation.validation_mode='full_pose';
+   project.validation.validation_tcp_pose_m_rad=[.4,.1,.22,.05,3.10,.03];
+   project.validation.pick_tcp_pose_m_rad=[...project.validation.validation_tcp_pose_m_rad];
+  }
   state.completed='capture_validation';
  }
  if(path==='/api/validation/move'){
@@ -44,7 +49,8 @@ async function fetch(path,options){
  return{ok:true,json:async()=>({accepted:true})};
 }
 const document={getElementById:id=>elements[id],querySelector:()=>({content:'token'}),querySelectorAll:()=>[],createElement:()=>({}),addEventListener(){}};
-vm.runInNewContext(fs.readFileSync(root+'teacher.js','utf8'),{document,fetch,console,setInterval(){}});
+const timers=[];
+vm.runInNewContext(fs.readFileSync(root+'teacher.js','utf8'),{document,fetch,console,setInterval(fn){timers.push(fn);}});
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
  await tick();await tick();
@@ -186,5 +192,21 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  assert.equal(elements['validation-image'].hidden,false);
  assert.match(elements['validation-target-pose'].textContent,/Z: 350.00 mm/);
  assert.equal(elements['validation-move'].disabled,true);
+ // A full project cannot reuse a fixed-height capture. Its next capture and
+ // confirmation explicitly include Z and all orientation coordinates.
+ settings.motion_model='full';
+ await timers[0]();
+ elements['validation-confirmed'].checked=true;elements['validation-confirmed'].events.change();
+ assert.equal(elements['validation-move'].disabled,true);
+ assert.equal(elements['validation-move'].textContent,'Move to full 3D pick');
+ assert.match(elements['validation-confirmation-text'].textContent,/including Z/);
+ elements['validation-capture'].events.click();await tick();await tick();
+ assert.match(elements['validation-target-pose'].textContent,/Z: 220.00 mm/);
+ assert.match(elements['validation-target-title'].textContent,/full 3D/);
+ assert.equal(elements['validation-move'].disabled,true);
+ elements['validation-confirmed'].checked=true;elements['validation-confirmed'].events.change();
+ assert.equal(elements['validation-move'].disabled,false);
+ await elements['validation-move'].events.click();await tick();await tick();
+ assert.match(elements.message.textContent,/Full 3D motion completed/);
  console.log('Wizard passed: single-panel navigation, step gates, capture, teach, failed read/retry, exports and settings invalidation.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

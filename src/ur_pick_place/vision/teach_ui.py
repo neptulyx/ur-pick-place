@@ -1,4 +1,4 @@
-"""Local marker teaching with explicitly requested fixed-height validation motion."""
+"""Local marker teaching with explicitly requested pose validation motion."""
 import argparse
 import errno
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -489,7 +489,7 @@ def main(argv=None):
             webbrowser.open(url)
         return 0
     url = f'http://127.0.0.1:{server.server_address[1]}'
-    print(f'Marker Pick Teacher v{VERSION}: {url}\nTeach using the pendant; step 5 offers explicit fixed-height validation motion.', flush=True)
+    print(f'Marker Pick Teacher v{VERSION}: {url}\nTeach using the pendant; step 5 offers explicit pose validation motion.', flush=True)
     if not args.no_browser:
         timer = threading.Timer(.3, webbrowser.open, args=(url,))
         timer.daemon = True
