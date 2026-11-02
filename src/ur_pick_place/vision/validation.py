@@ -31,6 +31,7 @@ def pose_error(actual, target):
 class ValidationMotion(ManualService):
     def __init__(self, settings, store, *, project, record, guard, factory=None):
         self.project, self.record, self.guard = project, record, guard
+        self.waypoint = None
         super().__init__(settings, store, factory=factory)
 
     def _read(self):
@@ -42,29 +43,58 @@ class ValidationMotion(ManualService):
     def _execute(self, command, payload, generation):
         if command != 'move_tcp':
             return super()._execute(command, payload, generation)
+        stage = payload.get('stage')
+        deadline = time.monotonic() + (2 if stage == 'descent' else .25)
         before = self._read()
-        time.sleep(.25)
-        after = self._read()
-        if max(abs(a-b) for a, b in zip(before['joints_rad'], after['joints_rad'])) > 2e-4:
-            raise ValueError('Robot must be stationary before validation motion')
+        while True:
+            time.sleep(.25)
+            after = self._read()
+            if after['safety_mode'] not in (1, 2):
+                raise ValueError('Robot safety mode changed before validation motion')
+            if max(abs(a-b) for a, b in zip(before['joints_rad'], after['joints_rad'])) <= 2e-4:
+                break
+            if stage != 'descent' or time.monotonic() >= deadline:
+                raise ValueError('Robot must be stationary before validation motion')
+            self.guard()
+            with self._lock:
+                if generation != self._generation or self._stop_requested.is_set() or self._shutdown.is_set():
+                    raise ValueError('Validation motion stopped before dispatch')
+            before = after
         captured = self.record['capture_robot']
-        error = pose_error(after['tcp_pose_m_rad'], captured['tcp_pose_m_rad'])
-        if (max(abs(a-b) for a, b in zip(after['joints_rad'], captured['joints_rad'])) > .0035
-                or error['position_mm'] > 3 or error['rotation_deg'] > 1):
-            raise ValueError('Robot moved since validation capture. Return to observation and capture again.')
-        target = self._workspace(self.record['validation_tcp_pose_m_rad'])
+        final = self._workspace(self.record['validation_tcp_pose_m_rad'])
         if self.record['validation_mode'] == 'full_pose':
-            if target != self.record.get('pick_tcp_pose_m_rad'):
+            if final != self.record.get('pick_tcp_pose_m_rad'):
                 raise ValueError('Full 3D validation target must match the calculated pick pose. Capture again.')
-        elif target[2] != captured['tcp_pose_m_rad'][2]:
+            if stage not in ('waypoint', 'descent'):
+                raise ValueError('Full 3D validation requires both motion stages')
+        elif stage is not None or final[2] != captured['tcp_pose_m_rad'][2]:
             raise ValueError('Validation target must keep the captured TCP height. Capture again.')
+        if stage == 'descent':
+            if self.waypoint is None:
+                raise ValueError('Complete the waypoint before descending')
+            error = pose_error(after['tcp_pose_m_rad'], self.waypoint)
+            if error['position_mm'] > 1 or error['rotation_deg'] > math.degrees(.005):
+                raise ValueError('Robot finished away from the waypoint; descent refused')
+            target = final
+        else:
+            error = pose_error(after['tcp_pose_m_rad'], captured['tcp_pose_m_rad'])
+            if (max(abs(a-b) for a, b in zip(after['joints_rad'], captured['joints_rad'])) > .0035
+                    or error['position_mm'] > 3 or error['rotation_deg'] > 1):
+                raise ValueError('Robot moved since validation capture. Return to observation and capture again.')
+            target = list(final)
+            if stage == 'waypoint':
+                if final[2] > after['tcp_pose_m_rad'][2]:
+                    raise ValueError('Pick is above the current height; vertical descent is not possible')
+                target[2] = after['tcp_pose_m_rad'][2]
+                self.waypoint = self._workspace(target)
         self._workspace(after['tcp_pose_m_rad'])
         if after['safety_mode'] not in (1, 2):
             raise ValueError('Robot must be in normal or reduced safety mode to move')
-        if self.control.getInverseKinematicsHasSolution(target, after['joints_rad']) is not True:
-            raise ValueError('Validation target has no inverse kinematics solution')
-        if self.control.isPoseWithinSafetyLimits(target) is not True:
-            raise ValueError('TCP target is unreachable or outside robot safety limits')
+        for pose in ([target, final] if stage == 'waypoint' else [target]):
+            if self.control.getInverseKinematicsHasSolution(pose, after['joints_rad']) is not True:
+                raise ValueError('Validation target has no inverse kinematics solution')
+            if self.control.isPoseWithinSafetyLimits(pose) is not True:
+                raise ValueError('TCP target is unreachable or outside robot safety limits')
         progress = self.control.getAsyncOperationProgress()
         # SDK preflight can take time. Check the operator's stop and all capture
         # conditions AFTER it, immediately before reserving/sending the movement.
@@ -88,8 +118,7 @@ class ValidationMotion(ManualService):
             motion = self._motion
         if motion and self.control:
             stop = self.control.stopJ if motion['mode'] == 'joint' else self.control.stopL
-            if stop(1.0) is not True:
-                raise RuntimeError('Robot rejected the validation stop')
+            stop(1.0)
             with self._lock:
                 self._motion = None
                 self._message = 'Movement stopped'

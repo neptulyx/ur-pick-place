@@ -172,8 +172,15 @@ class TeachingService:
                 motion.submit('move_saved')
             else:
                 target = record['validation_tcp_pose_m_rad']
-                motion.submit('move_tcp', {'pose_mm_deg': [v*1000 for v in target[:3]]
-                               + [math.degrees(v) for v in target[3:]]})
+                if record['validation_mode'] == 'full_pose':
+                    motion.submit('move_tcp', {'stage': 'waypoint'})
+                    state = wait_idle()
+                    if state['message'] != 'Movement complete' or state['feedback'] is None:
+                        raise ValueError('Validation waypoint did not complete')
+                    guard()
+                    motion.submit('move_tcp', {'stage': 'descent'})
+                else:
+                    motion.submit('move_tcp')
             state = wait_idle()
             if state['message'] != 'Movement complete' or state['feedback'] is None:
                 raise ValueError('Validation move did not complete')

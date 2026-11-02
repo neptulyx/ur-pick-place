@@ -35,7 +35,8 @@ class ValidationRobot(DemoRobot):
 
     def stopL(self, *args):
         self.stops += 1
-        return super().stopL(*args)
+        super().stopL(*args)
+        return None
 
     def moveJ(self, *args):
         self.joint_moves.append(args)
@@ -43,7 +44,8 @@ class ValidationRobot(DemoRobot):
 
     def stopJ(self, *args):
         self.joint_stops += 1
-        return super().stopJ(*args)
+        super().stopJ(*args)
+        return None
 
     def getForwardKinematics(self, joints, tcp_offset=None):
         self.fk_calls.append((list(joints), tcp_offset))
@@ -128,7 +130,7 @@ class ValidationTests(unittest.TestCase):
     def full_pose_record(self):
         self.project.settings['motion_model'] = 'full'
         self.project.config.pick.motion_model = 'full'
-        target = [.42, -.12, self.robot.pose[2] + .015, .12, 3.05, .08]
+        target = [.42, -.12, self.robot.pose[2] - .015, .12, 3.05, .08]
         self.project.validation = dict(self.record, validation_mode='full_pose',
             pick_tcp_pose_m_rad=list(target), validation_tcp_pose_m_rad=list(target))
         return target
@@ -139,11 +141,106 @@ class ValidationTests(unittest.TestCase):
         self.wait_done()
         self.assertEqual(self.service.error, '')
         self.assertEqual(self.project.validation['status'], 'completed')
-        for actual, expected in zip(self.robot.moves[0][0], target):
+        self.assertEqual(len(self.robot.moves), 2)
+        waypoint = list(target)
+        waypoint[2] = self.record['capture_robot']['tcp_pose_m_rad'][2]
+        for actual, expected in zip(self.robot.moves[0][0], waypoint):
             self.assertAlmostEqual(actual, expected)
-        self.assertNotEqual(self.robot.moves[0][0][2], self.record['capture_robot']['tcp_pose_m_rad'][2])
+        for actual, expected in zip(self.robot.moves[1][0], target):
+            self.assertAlmostEqual(actual, expected)
         with self.assertRaisesRegex(ValueError, 'fresh validation'):
             self.service.move_validation(self.body)
+
+    def test_full_pose_does_not_descend_if_waypoint_is_missed(self):
+        self.full_pose_record()
+        def wrong_waypoint(pose, *args):
+            self.robot.moves.append((pose, *args))
+            wrong = list(pose)
+            wrong[0] += .01
+            return DemoRobot.moveL(self.robot, wrong, *args)
+        self.robot.moveL = wrong_waypoint
+        self.service.move_validation(self.body)
+        self.wait_done()
+        self.assertIn('waypoint', self.service.error)
+        self.assertEqual(len(self.robot.moves), 1)
+
+    def test_stop_after_waypoint_prevents_descent(self):
+        self.full_pose_record()
+        original_guard = self.service._motion_guard
+        def stop_at_waypoint(project, record):
+            if self.robot.moves and self.robot._move is None:
+                self.service.stop()
+            original_guard(project, record)
+        self.service._motion_guard = stop_at_waypoint
+        self.service.move_validation(self.body)
+        self.wait_done()
+        self.assertEqual(self.project.validation['status'], 'stopped')
+        self.assertEqual(len(self.robot.moves), 1)
+
+    def test_descent_waits_for_settling_but_refuses_continuous_motion(self):
+        for persistent in (False, True):
+            with self.subTest(persistent=persistent):
+                self.robot = ValidationRobot()
+                self.full_pose_record()
+                original_q = self.robot.getActualQ
+                samples = []
+                def settling_q():
+                    values = original_q()
+                    if self.robot.moves and self.robot._move is None:
+                        samples.append(1)
+                        if persistent or len(samples) <= 5:
+                            values[0] += .0004 if len(samples) % 2 else 0
+                    return values
+                self.robot.getActualQ = settling_q
+                self.service.heartbeat()
+                self.service.move_validation(self.body)
+                self.wait_done()
+                self.assertGreaterEqual(len(samples), 5)
+                if persistent:
+                    self.assertIn('stationary', self.service.error)
+                    self.assertEqual(len(self.robot.moves), 1)
+                else:
+                    self.assertEqual(self.service.error, '')
+                    self.assertEqual(len(self.robot.moves), 2)
+
+    def test_stop_while_settling_prevents_descent(self):
+        self.full_pose_record()
+        original_q = self.robot.getActualQ
+        samples = []
+        def moving_q():
+            values = original_q()
+            if self.robot.moves and self.robot._move is None:
+                samples.append(1)
+                values[0] += .0004 if len(samples) % 2 else 0
+            return values
+        original_guard = self.service._motion_guard
+        def stop_during_settling(project, record):
+            if len(samples) >= 2:
+                self.service.stop()
+            original_guard(project, record)
+        self.robot.getActualQ = moving_q
+        self.service._motion_guard = stop_during_settling
+        self.service.move_validation(self.body)
+        self.wait_done()
+        self.assertEqual(self.project.validation['status'], 'stopped')
+        self.assertEqual(len(self.robot.moves), 1)
+
+    def test_full_pose_preflights_both_targets_and_refuses_ascent(self):
+        target = self.full_pose_record()
+        self.robot.isPoseWithinSafetyLimits = lambda pose: pose[2] != target[2]
+        self.service.move_validation(self.body)
+        self.wait_done()
+        self.assertTrue(self.service.error)
+        self.assertFalse(self.robot.moves)
+        self.robot = ValidationRobot()
+        self.full_pose_record()
+        self.project.validation['pick_tcp_pose_m_rad'][2] = self.robot.pose[2] + .01
+        self.project.validation['validation_tcp_pose_m_rad'][2] = self.robot.pose[2] + .01
+        self.service.heartbeat()
+        self.service.move_validation(self.body)
+        self.wait_done()
+        self.assertIn('above the current height', self.service.error)
+        self.assertFalse(self.robot.moves)
 
     def test_full_project_refuses_fixed_height_capture_before_connecting(self):
         self.project.config.pick.motion_model = 'full'
@@ -166,7 +263,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_full_pose_height_must_fit_workspace(self):
         target = self.full_pose_record()
-        body = dict(self.body, workspace_max_m=[.9, .9, target[2] - .005])
+        body = dict(self.body, workspace_min_m=[-.9, -.9, target[2] + .005])
         self.service.move_validation(body)
         self.wait_done()
         self.assertEqual(self.project.validation['status'], 'failed')
@@ -446,11 +543,13 @@ class ValidationTests(unittest.TestCase):
                 if problem == 'tcp':
                     self.robot.tcp = [0]*6
                 else:
-                    self.robot.stopL = lambda *args: False
+                    def fail_stop(*args):
+                        raise RuntimeError('stop failed')
+                    self.robot.stopL = fail_stop
                     self.service.stop()
                 self.wait_done()
                 self.assertEqual(self.project.validation['status'], 'failed')
-                self.assertIn('TCP' if problem == 'tcp' else 'rejected the validation stop', self.service.error)
+                self.assertIn('TCP' if problem == 'tcp' else 'stop failed', self.service.error)
                 self.assertFalse(self.robot.connected)
 
 

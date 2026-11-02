@@ -147,8 +147,9 @@ Open http://127.0.0.1:8766. Follow the five steps with **Next** and **Back**:
    movement range. Set workspace bounds and speeds under **Test motion settings**.
    From any clear camera view, stop the arm and click **Capture for validation**.
    Review the image and all six target coordinates. Confirm that the AGV and
-   marker stayed fixed and the linear path is clear, then click **Move to full
-   3D pick**. Full projects follow the calculated pick XYZ and orientation,
+   marker stayed fixed and both paths are clear, then click **Move to full
+   3D pick**. Full projects move to pick XY and orientation at the current height,
+   then descend vertically to the pick height. They follow the calculated XYZ and orientation,
    including height and tilt changes. The tool can descend to the taught endpoint;
    this test has no contact search and does not operate the gripper. Planar
    projects retain **Move at fixed Z**, which holds the captured TCP height.

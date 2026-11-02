@@ -113,10 +113,10 @@ function renderValidation(p,busy) {
   $('validation-target-title').textContent=full?'Validation target · full 3D pick pose':'Validation target · Z held at capture height';
   $('validation-move').textContent=full?'Move to full 3D pick':'Move at fixed Z';
   $('validation-confirmation-text').textContent=full
-    ? 'The AGV and marker/object have stayed fixed since capture. I reviewed all six target coordinates, including Z, the workspace and the clear linear path to the pick endpoint.'
+    ? 'The AGV and marker/object have stayed fixed since capture. I reviewed all six target coordinates, including Z, the workspace and both clear paths: XY and orientation at current height, then vertical descent to the pick endpoint.'
     : 'The AGV and marker/object have stayed fixed since capture. I reviewed the target, workspace and clear linear path at the captured TCP height.';
   $('validation-motion-help').textContent=full
-    ? 'One slow linear move to the calculated pick endpoint, including Z and tool orientation. It can lower the tool to the taught endpoint; it does not search for contact or operate the gripper. The approach-height setting does not apply. Keep this tab active. Each attempt requires a fresh capture within 60 seconds.'
+    ? 'Two slow linear moves: first XY and orientation at the current height, then vertically down to the calculated pick endpoint. Both paths must be clear; it does not search for contact or operate the gripper. The approach-height setting does not apply. Keep this tab active. Each attempt requires a fresh capture within 60 seconds.'
     : 'One slow linear move following pick XY and orientation, holding capture Z. The approach-height setting does not apply. Keep this tab active. Each attempt requires a fresh capture within 60 seconds.';
   $('validation-review-help').textContent=full
     ? 'TCP agreement checks arrival at the commanded pose. Independently check the gripper position and orientation against the object to assess camera-derived accuracy.'
