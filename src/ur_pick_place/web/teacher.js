@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="teach-token"]').content;
 let defaults, state, dirty = false, posting = false, previousResult = '', imageVersion = 0;
+let minPixelsPerModule = 5;
 let connectionOK = true, validationImageId = '';
 const steps = ['configure', 'capture', 'teach', 'locate', 'validate'];
 let activeStep = 0;
@@ -64,6 +65,7 @@ function fill(s) {
   for (const id of ['project','calibration','robot_ip','motion_model','approach_mm']) $(id).value=s[id];
   $('max_shift_mm').value=s.limits?.max_shift_mm??100; $('max_rotation_deg').value=s.limits?.max_rotation_deg??180;
   $('camera_provider').value=s.camera_provider||'realsense';
+  minPixelsPerModule=s.min_pixels_per_module??5;
   $('refine_before_pick').checked=s.refine_before_pick??false;
   $('tcp').value=tcpText(s.tcp); $('kind').value=s.target.kind;
   if(s.target.kind==='charuco') { $('manifest').value=s.target.board_manifest; $('board').value=s.target.board; }
@@ -77,6 +79,7 @@ function settings() {
     throw new Error('Active gripper TCP needs six numbers: X, Y, Z in mm, then RX, RY, RZ in rotation-vector radians.');
   return {project:$('project').value,calibration:$('calibration').value,robot_ip:$('robot_ip').value,
     camera_provider:$('camera_provider').value,refine_before_pick:$('refine_before_pick').checked,
+    min_pixels_per_module:minPixelsPerModule,
     motion_model:$('motion_model').value,approach_mm:Number($('approach_mm').value),
     tcp,tcp_confirmed:$('tcp_confirmed').checked,
     limits:{max_shift_mm:Number($('max_shift_mm').value),max_rotation_deg:Number($('max_rotation_deg').value),max_tilt_change_deg:10,max_height_change_mm:10,max_tool_tilt_deg:20},
@@ -182,7 +185,7 @@ function render() {
   renderWizard(ready,busy);
   if(p&&!dirty) {
     $('movement-limits').textContent=`Configured limits: ${p.settings.limits.max_shift_mm} mm target shift and ${p.settings.limits.max_rotation_deg}° rotation.`;
-    $('setup-result').textContent='Calibration '+p.calibration.verdict.toUpperCase()+' · '+p.target+'\nCamera serial: '+(p.calibration.camera_serial||'not recorded')+'\n'+p.project;
+    $('setup-result').textContent='Calibration '+p.calibration.verdict.toUpperCase()+' · '+p.target+'\nCamera serial: '+(p.calibration.camera_serial||'not recorded')+'\nMinimum marker resolution: '+Math.max(4,p.settings.min_pixels_per_module)+' px/module for teaching; '+p.settings.min_pixels_per_module+' px/module for later reads\n'+p.project;
     const o=p.observation;
     $('capture-result').textContent=o?`${o.quality.frames_accepted} accepted frames · ${o.quality.corner_count} corners · fit ${o.quality.reprojection_rmse_px.toFixed(3)} px` : '';
     $('observe-joints').textContent=o?'Saved observation joints (degrees): '+p.observe_joints.map(q=>(q*180/Math.PI).toFixed(2)).join(', '):'Saved observation joints appear after capture.';

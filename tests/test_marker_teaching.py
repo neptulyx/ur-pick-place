@@ -54,6 +54,37 @@ class MarkerTeachingTests(unittest.TestCase):
         from vision_sim import true_flange
         self.world.rtde.flange = true_flange(OBSERVE_PICK)
 
+    def test_pixel_minimum_is_project_scoped_and_persisted(self):
+        self.assertEqual(self.project.config.quality.min_pixels_per_module, 5.0)
+        settings = dict(self.settings, project=str(self.root / 'four-pixel'), min_pixels_per_module=4.0)
+        project = TeachingProject(settings, runtime=self.runtime)
+        self.assertEqual(project.config.quality.min_pixels_per_module, 4.0)
+        self.assertEqual(project.config.quality.min_charuco_corners, 6)
+        self.assertEqual(read_json(project.directory / 'vision.json')['quality']['min_pixels_per_module'], 4.0)
+        reopened = TeachingProject(settings, runtime=self.runtime)
+        self.assertEqual(reopened.config.quality.min_pixels_per_module, 4.0)
+        three = dict(settings, project=str(self.root / 'three-pixel'), min_pixels_per_module=3.0)
+        self.assertEqual(TeachingProject(three, runtime=self.runtime).config.quality.min_pixels_per_module, 3.0)
+        self.assertEqual(TeachingProject(three, runtime=self.runtime).config.quality.min_pixels_per_module, 3.0)
+        with self.assertRaisesRegex(ValueError, 'minimum pixels per module'):
+            TeachingProject(dict(settings, project=str(self.root / 'too-low'), min_pixels_per_module=2.9))
+        with self.assertRaisesRegex(ValueError, 'different settings'):
+            TeachingProject(dict(settings, min_pixels_per_module=5.0), runtime=self.runtime)
+
+    def test_reference_capture_uses_four_pixels_and_later_reads_use_three(self):
+        from ur_pick_place.vision.observe import Observer
+        self.project.config.quality.min_pixels_per_module = 3
+        thresholds = []
+        def observer(config, *args, **kwargs):
+            thresholds.append(config.quality.min_pixels_per_module)
+            return Observer(config, *args, **kwargs)
+        with patch('ur_pick_place.vision.teaching.Observer', side_effect=observer):
+            self.capture_and_teach()
+            self.project.locate()
+            self.project.capture_validation()
+        self.assertEqual(thresholds, [4, 3, 3])
+        self.assertEqual(self.project.config.quality.min_pixels_per_module, 3)
+
     def test_capture_teach_move_marker_export_and_reopen(self):
         self.capture_and_teach()
         self.world.move_pick(10, -8, 4)

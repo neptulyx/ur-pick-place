@@ -9,7 +9,7 @@ const settings={project:'/tmp/project',calibration:'/tmp/calibration.json',robot
 const project={settings,project:settings.project,flow:{captured:false,taught:false,exported:false},calibration:{verdict:'good',camera_serial:'fake'},target:'Test board',observe_joints:[0,0,0,0,0,0]};
 const boardOptions=[{target:settings.target,dimensions_mm:[80,80],dictionary:'DICT_6X6_250'},
  {target:{kind:'charuco',board_manifest:'/tmp/tanks.json',board:'tank15'},dimensions_mm:[80,80],dictionary:'DICT_6X6_250'}];
-let locateAttempts=0,configuredTCP;
+let locateAttempts=0,configuredTCP,configuredMinimum;
 let moveRequests=0;
 let state={version:'0.1.0',project:null,busy:null,error:'',completed:null};
 async function fetch(path,options){
@@ -18,7 +18,7 @@ async function fetch(path,options){
  if(path==='/api/open')return{ok:true,json:async()=>structuredClone(settings)};
  if(path==='/api/configure'){
   if(configureError)return{ok:false,json:async()=>({error:configureError})};
-  configuredTCP=JSON.parse(options.body).tcp;state.project=project;state.completed='configure';
+  configuredTCP=JSON.parse(options.body).tcp;configuredMinimum=JSON.parse(options.body).min_pixels_per_module;state.project=project;state.completed='configure';
  }
  if(path==='/api/capture'){project.flow.captured=true;project.observation={quality:{frames_accepted:10,corner_count:24,reprojection_rmse_px:.2}};state.completed='capture';}
  if(path==='/api/teach'){project.flow.taught=true;project.taught={taught_tcp_in_base:[.4,.1,.2,0,3.14,0]};state.completed='teach';}
@@ -176,6 +176,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  assert.equal(elements.capture.disabled,true);
  assert.equal(elements['saved-links'].hidden,true);
  assert.equal(elements.tcp_confirmed.checked,false);
+ settings.min_pixels_per_module=4;
  elements.open.events.click();await tick();await tick();
  assert.equal(elements.tcp.value,'0, 0, 70, 0, 0, 0'); // saved JSON stays in metres
  // The backend deliberately clears fresh exports and validation permission when reopening.
@@ -183,6 +184,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  elements.tcp_confirmed.checked=true;
  await elements.setup.events.submit({preventDefault(){}});await tick();await tick();
  assert.deepEqual(configuredTCP,settings.tcp); // opening and saving does not rescale the stored TCP
+ assert.equal(configuredMinimum,4); // project-specific quality survives reopening
  assert.equal(elements['step-validate'].hidden,false);
  assert.equal(elements['validation-capture'].disabled,false);
  assert.equal(elements['validation-move'].disabled,true);

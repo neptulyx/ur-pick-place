@@ -4,7 +4,7 @@ A project stores a marker observation, a marker-relative TCP endpoint and reusab
 vision.json. Exports are snapshots; approach tests require a separate fresh capture.
 """
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -99,6 +99,7 @@ def defaults(repo):
                          'robot_ip': calibrations[0]['robot_ip'] if calibrations else '',
                          'tcp': calibrations[0]['tcp'] if calibrations else [0.0] * 6,
                          'camera_provider': 'realsense', 'refine_before_pick': True,
+                         'min_pixels_per_module': 5.0,
                          'target': target,
                          'motion_model': 'full', 'approach_mm': 100.0, 'limits': asdict(Limits())}}
 
@@ -123,6 +124,8 @@ class TeachingProject:
         raw['limits'] = settings.get('limits', asdict(Limits()))
         raw['camera_provider'] = settings.get('camera_provider', 'realsense')
         raw['refine_before_pick'] = settings.get('refine_before_pick', False)
+        raw['min_pixels_per_module'] = number(settings.get('min_pixels_per_module', 5.0),
+                                              'minimum pixels per module', low=3.0, high=100.0)
         raw['tcp'] = vector(raw['tcp'], 6, 'Active gripper TCP offset (m/rad)')
         raw['approach_mm'] = number(raw['approach_mm'], 'Approach height (mm)', low=1, high=300)
         if not isinstance(raw['robot_ip'], str) or not raw['robot_ip'].strip() or any(c.isspace() for c in raw['robot_ip']):
@@ -152,6 +155,7 @@ class TeachingProject:
                     'serial': self.calibration.camera_serial, 'width': self.calibration.intrinsics['width'],
                     'height': self.calibration.intrinsics['height'], 'fps': stream.get('fps', 15)},
             robot={'active_tcp_offset': raw['tcp']},
+            quality={'min_pixels_per_module': raw['min_pixels_per_module']},
             pick={'target': raw['target'], 'observe_joints': [0.0] * 6, 'grasp': 'grasp_pick.json',
                   'motion_model': raw['motion_model'], 'limits': raw['limits'],
                   'refine': {'enabled': raw.get('refine_before_pick', False)}}, base_dir=str(self.directory))
@@ -172,6 +176,7 @@ class TeachingProject:
             saved_settings = dict(saved['settings'])
             saved_settings.setdefault('camera_provider', 'realsense')
             saved_settings.setdefault('refine_before_pick', False)
+            saved_settings.setdefault('min_pixels_per_module', 5.0)
             if saved_settings != raw or saved['inputs'] != self.inputs:
                 raise ValueError('This folder belongs to different settings or changed input files. '
                                  'Choose a new project folder to teach again.')
@@ -211,14 +216,18 @@ class TeachingProject:
         finally:
             _close(receive)
 
-    def _look(self, image_name='capture.jpg'):
+    def _look(self, image_name='capture.jpg', *, reference=False):
+        config = self.config
+        if reference:
+            config = replace(config, quality=replace(config.quality,
+                min_pixels_per_module=max(4.0, config.quality.min_pixels_per_module)))
         with self.receiver() as source:
             camera = self.runtime.camera(self.config.camera)
             preview = PreviewCamera(camera)
             observation = None
             try:
                 check_camera_identity(camera, self.calibration)
-                observation = Observer(self.config, self.calibration, preview, source).look('pick', allow_motion=False)
+                observation = Observer(config, self.calibration, preview, source).look('pick', allow_motion=False)
                 return observation
             finally:
                 _close(camera)
@@ -256,7 +265,7 @@ class TeachingProject:
         self.flow = {'captured': False, 'taught': False, 'exported': False}
         self.observation = self.taught = self.exported = None
         self._persist()
-        observation = self._look()
+        observation = self._look(reference=True)
         self.check_inputs()
         self.observation = observation
         self.config.pick.observe_joints = list(observation.robot['joints_rad'])
