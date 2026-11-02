@@ -114,6 +114,7 @@ class MarkerTeachingTests(unittest.TestCase):
         self.assertEqual((self.project.directory / 'observation.json').read_bytes(), reference)
         self.assertEqual((self.project.directory / 'grasp_pick.json').read_bytes(), grasp)
         self.assertEqual((self.project.directory / 'target.json').read_bytes(), exported)
+
         self.assertTrue(self.project.flow['exported'])
         self.assertTrue((self.project.directory / 'validation.jpg').exists())
         self.project.record_validation(dict(record, status='completed', visual_result='aligned'))
@@ -126,6 +127,40 @@ class MarkerTeachingTests(unittest.TestCase):
         self.assertIsNone(self.project.validation)
         self.assertFalse((self.project.directory / 'validation_capture.json').exists())
         self.assertEqual((self.project.directory / 'target.json').read_bytes(), exported)
+
+    def test_full_pose_validation_tracks_each_axis_and_combined_parking_changes(self):
+        from ur_pick_place.vision.transforms import rotvec_to_matrix, rotation_angle
+        self.settings.update(project=str(self.root / 'full-project'), motion_model='full', refine_before_pick=True)
+        self.project = TeachingProject(self.settings, runtime=self.runtime)
+        self.project.config.robot.settle_s = 0
+        self.project.config.quality.frames = 3
+        self.project.config.quality.max_attempt_frames = 8
+        self.capture_and_teach()
+        reference_marker = self.world.pick.copy()
+        reference = (self.project.directory / 'observation.json').read_bytes()
+        grasp = (self.project.directory / 'grasp_pick.json').read_bytes()
+        changes = [(10, 0, 0, 0, 0, 0), (0, -10, 0, 0, 0, 0),
+                   (0, 0, 15, 0, 0, 0), (0, 0, 0, 3, 0, 0),
+                   (0, 0, 0, 0, -3, 0), (0, 0, 0, 0, 0, 5),
+                   (8, -6, -12, 2, -3, 5)]
+        for change in changes:
+            with self.subTest(change=change):
+                moved = reference_marker.copy()
+                moved[:3, 3] += np.asarray(change[:3]) / 1000
+                moved[:3, :3] = rotvec_to_matrix(np.radians(change[3:])) @ reference_marker[:3, :3]
+                self.world.pick = moved
+                target, _ = self.world.camera.scene[0]
+                self.world.camera.scene[0] = (target, moved)
+                record = self.project.capture_validation()
+                self.assertEqual(record['validation_mode'], 'full_pose')
+                self.assertEqual(record['validation_tcp_pose_m_rad'], record['pick_tcp_pose_m_rad'])
+                measured = pose_to_matrix(record['validation_tcp_pose_m_rad'])
+                expected = moved @ MARKER_TCP
+                self.assertLess(np.linalg.norm(measured[:3, 3] - expected[:3, 3]) * 1000, 1)
+                self.assertLess(np.degrees(rotation_angle(measured, expected)), .5)
+                self.assertTrue(record['refinement_required'])  # Validation itself remains a current-view measurement.
+        self.assertEqual((self.project.directory / 'observation.json').read_bytes(), reference)
+        self.assertEqual((self.project.directory / 'grasp_pick.json').read_bytes(), grasp)
 
     def test_reopened_taught_project_can_validate_without_fresh_export(self):
         self.capture_and_teach()
@@ -232,6 +267,7 @@ class MarkerTeachingTests(unittest.TestCase):
         self.assertEqual([c['path'] for c in discovered['calibrations']], [str(local), str(original)])
         self.assertEqual(discovered['settings']['calibration'], str(local))
         self.assertEqual(discovered['settings']['tcp'], tcp)
+        self.assertEqual(discovered['settings']['motion_model'], 'full')
         self.assertFalse(self.runtime.calls)
 
     def test_defaults_choose_80_mm_picking_board_and_remember_captured_target(self):

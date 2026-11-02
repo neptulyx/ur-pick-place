@@ -8,6 +8,7 @@ const readline = require('node:readline');
 const {once} = require('node:events');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
+const fullPose = process.env.MARKER_VALIDATION_MOTION_MODEL === 'full';
 const directory = fs.mkdtempSync(path.join(os.tmpdir(),'marker-validation-chrome-'));
 const fixture = spawn(process.env.PYTHON || path.join(__dirname,'../.venv/bin/python'),[path.join(__dirname,'marker_validation_fixture.py')]);
 const chrome = spawn(process.env.CHROME_BINARY || '/usr/bin/google-chrome',[
@@ -69,10 +70,11 @@ async function capture(scene){
   await wait('document.getElementById("validation-preview").hidden===false&&!document.getElementById("validation-capture").disabled','validation capture');
   const value=(await api('/api/state')).body.project.validation;
   assert.equal(value.status,'captured');
-  assert.equal(value.validation_mode,'fixed_z');
-  assert.equal(value.validation_tcp_pose_m_rad[2],value.capture_robot.tcp_pose_m_rad[2]);
+  assert.equal(value.validation_mode,fullPose?'full_pose':'fixed_z');
+  if(fullPose)assert.deepEqual(value.validation_tcp_pose_m_rad,value.pick_tcp_pose_m_rad);
+  else assert.equal(value.validation_tcp_pose_m_rad[2],value.capture_robot.tcp_pose_m_rad[2]);
   const expectedValidation=[...scenario.body.expected_pick];
-  expectedValidation[2]=value.capture_robot.tcp_pose_m_rad[2];
+  if(!fullPose)expectedValidation[2]=value.capture_robot.tcp_pose_m_rad[2];
   const trackingError=errorBetween(value.validation_tcp_pose_m_rad,expectedValidation);
   assert.ok(trackingError[0]<2&&trackingError[1]<.02,'fixed-height target follows marker XY and orientation');
   await wait('document.getElementById("validation-image").complete&&document.getElementById("validation-image").naturalWidth>0','annotated image');
@@ -81,6 +83,7 @@ async function capture(scene){
   assert.ok(error[0]<2,'computed position matches marker ground truth: '+error[0]);
   assert.ok(error[1]<.02,'computed rotation matches marker ground truth: '+error[1]);
   assert.equal(await evaluate('document.getElementById("validation-move").disabled'),true);
+  assert.equal(await evaluate('document.getElementById("validation-move").textContent'),fullPose?'Move to full 3D pick':'Move at fixed Z');
   return value;
 }
 async function move(){
@@ -134,11 +137,11 @@ async function screenshot(filename){
   await returnToObservation();
   assert.equal((await api('/__test__/metrics')).body.joint_moves.length,2);
 
-  const first=await capture({dx_mm:8,dy_mm:-6,yaw_deg:5});
+  const first=await capture({dx_mm:8,dy_mm:-6,yaw_deg:5,...(fullPose?{dz_mm:12,roll_deg:2,pitch_deg:-3}:{})});
   assert.ok(Math.abs(first.validation.marker_yaw_change_deg-5)<.4);
   assert.equal(await evaluate('fetch("/api/validation/move",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}).then(r=>r.status)'),403);
   await move();const completed=await result('completed');
-  assert.equal(completed.actual_tcp_pose_m_rad[2],first.capture_robot.tcp_pose_m_rad[2]);
+  assert.ok(Math.abs(completed.actual_tcp_pose_m_rad[2]-first.validation_tcp_pose_m_rad[2])<1e-12);
   assert.ok(completed.error.position_mm<=1);assert.ok(completed.error.rotation_deg<=.287);
   assert.equal(await evaluate('document.getElementById("light-validate").textContent'),'● Pending');
   await click('validation-aligned');await wait('document.getElementById("light-validate").textContent==="● Ready"','visual pass');
@@ -155,7 +158,7 @@ async function screenshot(filename){
   await returnToObservation();
   assert.equal((await api('/__test__/metrics')).body.joint_moves.length,3);
 
-  const second=await capture({dx_mm:-6,dy_mm:3,yaw_deg:-4});assert.notEqual(first.id,second.id);
+  const second=await capture({dx_mm:-6,dy_mm:3,yaw_deg:-4,...(fullPose?{dz_mm:-8,roll_deg:-2,pitch_deg:1}:{})});assert.notEqual(first.id,second.id);
   await move();await result('completed');await click('validation-misaligned');
   await wait('document.getElementById("light-validate").textContent==="● Failed"','visual mismatch');
   const history=(await api('/api/state')).body.project.validation_history;
@@ -206,7 +209,7 @@ async function screenshot(filename){
   assert.equal((await api('/__test__/metrics')).body.moves.length,4);
   assert.deepEqual(jsErrors,[],'no browser JavaScript errors');
   if(process.env.MARKER_VALIDATION_SCREENSHOT)await screenshot(process.env.MARKER_VALIDATION_SCREENSHOT);
-  console.log('Browser verified: real setup/capture/teach/export; rotated markers; two fixed-height moves; measured TCP; visual pass/fail; preserved teaching/exports; replay/expiry rejection; Stop; wrong TCP; network-loss heartbeat stop; restored history; validation capture after reopening without a fresh export; no JavaScript errors.');
+  console.log('Browser verified: '+(fullPose?'full XYZ/orientation':'fixed-height')+' tracking; real setup/capture/teach/export; measured TCP; visual pass/fail; preserved teaching/exports; replay/expiry rejection; Stop; wrong TCP; network-loss heartbeat stop; restored history; validation capture after reopening without a fresh export; no JavaScript errors.');
 })().catch(error=>{console.error(error.stack+'\n'+log);process.exitCode=1;}).finally(async()=>{
   async function close(child){if(child.exitCode!==null||child.signalCode!==null)return;const exited=once(child,'exit');child.kill('SIGTERM');await exited;}
   await Promise.all([close(fixture),close(chrome)]);

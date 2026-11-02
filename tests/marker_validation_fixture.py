@@ -4,6 +4,7 @@ All paths live in a temporary directory. This file never opens hardware interfac
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import signal
 import subprocess
@@ -20,7 +21,7 @@ from test_marker_validation import ValidationRobot
 from ur_pick_place.poses import atomic_json
 from ur_pick_place.vision import teach_ui
 from ur_pick_place.vision.teaching import digest, read_json
-from ur_pick_place.vision.transforms import invert, matrix_to_pose, pose_to_matrix
+from ur_pick_place.vision.transforms import invert, matrix_to_pose, pose_to_matrix, rotvec_to_matrix
 
 
 def run_worker(project_path, action):
@@ -88,6 +89,9 @@ class FixtureHandler(teach_ui.Handler):
             body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             world = World()
             world.move_pick(body.get('dx_mm', 0), body.get('dy_mm', 0), body.get('yaw_deg', 0))
+            world.pick[2, 3] += body.get('dz_mm', 0) / 1000
+            tilt = np.radians([body.get('roll_deg', 0), body.get('pitch_deg', 0), 0])
+            world.pick[:3, :3] = rotvec_to_matrix(tilt) @ world.pick[:3, :3]
             service = self.server.service
             service.mode = body.get('mode', 'normal')
             if body.get('expire_capture'):
@@ -112,7 +116,8 @@ def serve():
         (root/'calibration.json').write_text(json.dumps(calibration_dict()))
         atomic_json(root/'scene.json', {'marker': World().pick.tolist()})
         settings = dict(project=str(root/'project'), calibration=str(root/'calibration.json'),
-            robot_ip='simulated-robot', tcp=list(TCP_OFFSET), motion_model='planar', approach_mm=100,
+            robot_ip='simulated-robot', tcp=list(TCP_OFFSET),
+            motion_model=os.environ.get('MARKER_VALIDATION_MOTION_MODEL', 'planar'), approach_mm=100,
             target=dict(kind='aruco', marker_id=7, dictionary='DICT_5X5_100', marker_length_mm=30))
         service = FixtureService(root)
         service.prefill = settings
