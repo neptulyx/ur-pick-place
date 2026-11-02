@@ -7,11 +7,13 @@ let invalidField=null,configureError='';
 const elements=Object.fromEntries(ids.map(id=>[id,{id,value:'',textContent:'',checked:false,hidden:false,disabled:false,events:{},classList:{toggle(){}},addEventListener(k,fn){this.events[k]=fn;},append(){},setAttribute(k,v){this[k]=v;},focus(){this.focused=true;},querySelector(){return invalidField;},querySelectorAll(){return [];},closest(){return elements['setup-advanced'];},reportValidity(){return false;}}]));
 const settings={project:'/tmp/project',calibration:'/tmp/calibration.json',robot_ip:'fake',tcp:[0,0,.07,0,0,0],target:{kind:'charuco',board_manifest:'/tmp/board.json',board:'front'},motion_model:'planar',approach_mm:100,limits:{max_shift_mm:30,max_rotation_deg:15}};
 const project={settings,project:settings.project,flow:{captured:false,taught:false,exported:false},calibration:{verdict:'good',camera_serial:'fake'},target:'Test board',observe_joints:[0,0,0,0,0,0]};
+const boardOptions=[{target:settings.target,dimensions_mm:[80,80],dictionary:'DICT_6X6_250'},
+ {target:{kind:'charuco',board_manifest:'/tmp/tanks.json',board:'tank15'},dimensions_mm:[80,80],dictionary:'DICT_6X6_250'}];
 let locateAttempts=0,configuredTCP;
 let moveRequests=0;
 let state={version:'0.1.0',project:null,busy:null,error:'',completed:null};
 async function fetch(path,options){
- if(path==='/api/defaults')return{ok:true,json:async()=>({settings,calibrations:[{path:settings.calibration,tcp:settings.tcp,robot_ip:settings.robot_ip}],manifests:[]})};
+ if(path==='/api/defaults')return{ok:true,json:async()=>({settings,calibrations:[{path:settings.calibration,tcp:settings.tcp,robot_ip:settings.robot_ip}],manifests:[],picking_boards:boardOptions})};
  if(path==='/api/state')return{ok:true,json:async()=>structuredClone(state)};
  if(path==='/api/open')return{ok:true,json:async()=>structuredClone(settings)};
  if(path==='/api/configure'){
@@ -25,16 +27,20 @@ async function fetch(path,options){
   else{state.completed='locate';state.failed=null;state.error='';project.flow.exported=true;project.exported={pick_tcp_pose_m_rad:[.4,.1,.2,0,3.14,0],approach_tcp_pose_m_rad:[.4,.1,.3,0,3.14,0]};}
  }
  if(path==='/api/validation/capture'){
-  project.validation={...project.exported,id:'capture-'+Date.now(),timestamp:Date.now()/1000,status:'captured',marker_tcp_pose_m_rad:[.4,.1,.2,0,0,0],quality:{frames_accepted:10,reprojection_rmse_px:.2},validation:{shift_from_taught_mm:10,rotation_from_taught_deg:5,marker_yaw_change_deg:5}};
+  project.validation={...project.exported,id:'capture-'+Date.now(),timestamp:Date.now()/1000,status:'captured',validation_mode:'fixed_z',validation_tcp_pose_m_rad:[.4,.1,.35,0,3.14,0],marker_tcp_pose_m_rad:[.4,.1,.2,0,0,0],quality:{frames_accepted:10,reprojection_rmse_px:.2},validation:{shift_from_taught_mm:10,rotation_from_taught_deg:5,marker_yaw_change_deg:5}};
   state.completed='capture_validation';
  }
  if(path==='/api/validation/move'){
   const body=JSON.parse(options.body);assert.equal(body.capture_id,project.validation.id);assert.equal(body.path_confirmed,true);
   assert.deepEqual(body.workspace_min_m,[-.9,-.9,.02]);assert.deepEqual(body.workspace_max_m,[.9,.9,1.2]);
-  moveRequests++;project.validation.status='completed';project.validation.actual_tcp_pose_m_rad=project.validation.approach_tcp_pose_m_rad;project.validation.error={position_mm:.1,rotation_deg:.01};project.validation_history=[structuredClone(project.validation)];state.completed='validate_move';
+  moveRequests++;project.validation.status='completed';project.validation.actual_tcp_pose_m_rad=project.validation.validation_tcp_pose_m_rad;project.validation.error={position_mm:.1,rotation_deg:.01};project.validation_history=[structuredClone(project.validation)];state.completed='validate_move';
  }
  if(path==='/api/validation/review'){project.validation.visual_result=JSON.parse(options.body).result;project.validation_history=[structuredClone(project.validation)];}
  if(path==='/api/validation/stop'&&project.validation?.status==='captured')project.validation.status='cancelled';
+ if(path==='/api/validation/return'){
+  const body=JSON.parse(options.body);assert.equal(body.path_confirmed,true);assert.equal(body.joint_speed_deg_s,3);
+  project.validation=null;state.return_result={status:'completed',joint_error_deg:.01};state.completed='return_observation';
+ }
  return{ok:true,json:async()=>({accepted:true})};
 }
 const document={getElementById:id=>elements[id],querySelector:()=>({content:'token'}),querySelectorAll:()=>[],createElement:()=>({}),addEventListener(){}};
@@ -43,6 +49,13 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
  await tick();await tick();
  assert.equal(elements.robot_ip.value,'fake');
+ assert.equal(elements['picking-board'].value,'0');
+ elements['picking-board'].value='1';elements['picking-board'].events.input();elements.setup.events.input();
+ assert.equal(elements.manifest.value,'/tmp/tanks.json');
+ assert.equal(elements.board.value,'tank15');
+ assert.equal(elements['picking-board'].value,'1'); // bubbling setup input must retain the selection
+ assert.equal(elements.calibration.value,settings.calibration);
+ elements['picking-board'].value='0';elements['picking-board'].events.input();elements.setup.events.input();
  assert.equal(elements.tcp.value,'0, 0, 70, 0, 0, 0');
  assert.match(elements['calibration-tcp'].textContent,/XYZ mm.*0, 0, 70, 0, 0, 0/);
  elements.tcp.value='1, 2, 3, 0, 0, 0';
@@ -95,10 +108,26 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  elements.next.events.click();
  assert.equal(elements['step-locate'].hidden,false);
  assert.equal(elements.next.hidden,false);
- assert.equal(elements['nav-validate'].disabled,true);
+ assert.equal(elements['nav-validate'].disabled,false); // validation captures need a taught pick, not an export
+ elements['nav-validate'].events.click();
+ assert.equal(elements['step-validate'].hidden,false);
+ assert.equal(elements['validation-capture'].disabled,false);
+ assert.equal(elements['validation-move'].disabled,true);
+ assert.equal(elements['observation-return'].disabled,true);
+ elements['observation-return-speed'].value='3';elements['validation-workspace-min'].value='-900, -900, 20';elements['validation-workspace-max'].value='900, 900, 1200';
+ elements['observation-return-confirmed'].checked=true;elements['observation-return-confirmed'].events.change();
+ assert.equal(elements['observation-return'].disabled,false);
+ await elements['observation-return'].events.click();await tick();await tick();
+ assert.equal(elements['observation-return'].disabled,true);
+ assert.match(elements['observation-return-result'].textContent,/completed.*0.010°/);
+ assert.match(elements.message.textContent,/Returned to the saved observation joints/);
+ assert.equal(elements['validation-preview'].hidden,true);
+ elements.back.events.click();
+ assert.equal(elements['step-locate'].hidden,false);
  elements.locate.events.click();await tick();await tick();
  assert.match(elements.message.textContent,/unstable marker/); // instant failure before first busy poll
  assert.equal(elements['light-locate'].textContent,'● Failed');
+ assert.equal(elements['nav-validate'].disabled,false); // a failed export must not lock validation
  elements.locate.events.click();await tick();await tick();
  assert.equal(elements['light-locate'].textContent,'● Ready');
  assert.equal(elements['export-result'].hidden,false);
@@ -109,6 +138,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  elements['validation-capture'].events.click();await tick();await tick();
  assert.equal(elements['validation-preview'].hidden,false);
  assert.equal(elements['validation-image'].hidden,false);
+ assert.match(elements['validation-target-pose'].textContent,/Z: 350.00 mm/);
  assert.equal(elements['validation-move'].disabled,true);
  elements['validation-speed'].value='10';elements['validation-workspace-min'].value='-900, -900, 20';elements['validation-workspace-max'].value='900, 900, 1200';
  elements['validation-confirmed'].checked=true;elements['validation-confirmed'].events.change();
@@ -136,8 +166,19 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  assert.equal(elements.tcp_confirmed.checked,false);
  elements.open.events.click();await tick();await tick();
  assert.equal(elements.tcp.value,'0, 0, 70, 0, 0, 0'); // saved JSON stays in metres
+ // The backend deliberately clears fresh exports and validation permission when reopening.
+ project.flow.exported=false;project.exported=null;project.validation=null;
  elements.tcp_confirmed.checked=true;
  await elements.setup.events.submit({preventDefault(){}});await tick();await tick();
  assert.deepEqual(configuredTCP,settings.tcp); // opening and saving does not rescale the stored TCP
+ assert.equal(elements['step-validate'].hidden,false);
+ assert.equal(elements['validation-capture'].disabled,false);
+ assert.equal(elements['validation-move'].disabled,true);
+ assert.equal(elements['export-result'].hidden,true);
+ elements['validation-capture'].events.click();await tick();await tick();
+ assert.equal(elements['validation-preview'].hidden,false);
+ assert.equal(elements['validation-image'].hidden,false);
+ assert.match(elements['validation-target-pose'].textContent,/Z: 350.00 mm/);
+ assert.equal(elements['validation-move'].disabled,true);
  console.log('Wizard passed: single-panel navigation, step gates, capture, teach, failed read/retry, exports and settings invalidation.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

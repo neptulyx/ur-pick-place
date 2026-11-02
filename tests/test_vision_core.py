@@ -205,10 +205,30 @@ class GraspTests(unittest.TestCase):
     def test_shift_beyond_limit_refused(self):
         far = face_up(-0.36, -0.33, yaw_deg=20)
         with self.assertRaises(TargetValidationError) as caught:
-            self.compute(far)
+            self.compute(far, self.role(limits={'max_shift_mm': 30}))
         self.assertIn('from the taught pose', str(caught.exception))
         pose, _ = self.compute(far, self.role(limits={'max_shift_mm': 60}))
         self.assertTrue(np.isfinite(pose).all())
+
+    def test_default_shift_limit_allows_49_mm_but_remains_bounded(self):
+        _, report = self.compute(face_up(-0.3506, -0.33, yaw_deg=20))
+        self.assertAlmostEqual(report['shift_from_taught_mm'], 49.4)
+        with self.assertRaisesRegex(TargetValidationError, 'limit 100 mm'):
+            self.compute(face_up(-0.29, -0.33, yaw_deg=20))
+
+    def test_default_rotation_limit_allows_full_yaw_and_explicit_limits_still_apply(self):
+        role = self.role(limits={'max_shift_mm': 200})
+        moved = face_up(-0.4, -0.33, yaw_deg=58.3)  # 38.3 degrees from teaching
+        _, report = self.compute(moved, role)
+        self.assertAlmostEqual(report['rotation_from_taught_deg'], 38.3)
+        for yaw, change in ((110.1, 90.1), (199.9, 179.9)):
+            _, report = self.compute(face_up(-0.4, -0.33, yaw_deg=yaw), role)
+            self.assertAlmostEqual(report['rotation_from_taught_deg'], change)
+        with self.assertRaisesRegex(TargetValidationError, 'limit 15 deg'):
+            self.compute(moved, self.role(limits={'max_shift_mm': 200, 'max_rotation_deg': 15}))
+        with self.assertRaisesRegex(TargetValidationError, 'limit 90 deg'):
+            self.compute(face_up(-0.4, -0.33, yaw_deg=111),
+                         self.role(limits={'max_shift_mm': 200, 'max_rotation_deg': 90}))
 
     def test_tilted_marker_and_tool_refused(self):
         tilted = self.marker @ make_transform((math.radians(25), 0, 0))

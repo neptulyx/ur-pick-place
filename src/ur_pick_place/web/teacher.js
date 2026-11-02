@@ -11,11 +11,13 @@ const guidance = [
   ['Frame the whole marker', 'Keep the camera and board still during capture. Review the detected axes and quality before continuing.'],
   ['Keep the marker fixed', 'Only move the robot. Teach the final pick position and orientation, then stop before saving.'],
   ['Return to the capture pose', 'Use the saved observation joints. The marker can move within your configured limits. Re-read for every pick.'],
-  ['Test your taught relationship', 'Capture a repositioned marker, review the new target, then explicitly test a slow approach move. Repeat with different positions and rotations.']
+  ['Test tracking at fixed Z', 'Capture a repositioned marker, review the new target, then explicitly test a slow move at the captured TCP height. Repeat with different positions and rotations.']
 ];
 function availableStep() {
   const f=state?.project?.flow||{};
-  return dirty||!state?.project ? 0 : f.exported ? 4 : f.taught ? 3 : f.captured ? 2 : 1;
+  // Validation makes its own fresh capture. Reopening clears export freshness,
+  // but the saved marker-to-pick relationship is sufficient to capture again.
+  return dirty||!state?.project ? 0 : f.taught ? 4 : f.captured ? 2 : 1;
 }
 function showStep(index) {
   if(state?.busy||posting||index<0||index>availableStep()) return;
@@ -46,6 +48,8 @@ function renderWizard(ready,busy) {
 function message(text, error=false) { $('message').textContent=text; $('message').classList.toggle('error',error); }
 function targetFields() {
   for (const kind of ['charuco','aruco']) document.querySelectorAll('.'+kind).forEach(el=>el.hidden=$('kind').value!==kind);
+  const index=(defaults?.picking_boards||[]).findIndex(b=>b.target.board_manifest===$('manifest').value&&b.target.board===$('board').value);
+  $('picking-board').value=index<0?'':String(index);
 }
 function tcpText(tcp) {
   return tcp.map((v,i)=>Number((i<3?v*1000:v).toPrecision(12))).join(', ');
@@ -58,7 +62,7 @@ function showCalibrationTCP() {
 }
 function fill(s) {
   for (const id of ['project','calibration','robot_ip','motion_model','approach_mm']) $(id).value=s[id];
-  $('max_shift_mm').value=s.limits?.max_shift_mm??30; $('max_rotation_deg').value=s.limits?.max_rotation_deg??15;
+  $('max_shift_mm').value=s.limits?.max_shift_mm??100; $('max_rotation_deg').value=s.limits?.max_rotation_deg??180;
   $('tcp').value=tcpText(s.tcp); $('kind').value=s.target.kind;
   if(s.target.kind==='charuco') { $('manifest').value=s.target.board_manifest; $('board').value=s.target.board; }
   else { for(const id of ['dictionary','marker_id','marker_length_mm']) $(id).value=s.target[id]; }
@@ -87,11 +91,19 @@ function restoreCapture() {
   }
 }
 function poseText(pose) { return pose ? '['+pose.map(v=>v.toFixed(6)).join(', ')+']' : ''; }
-function failedStep() { return ['capture_validation','validate_move'].includes(state?.failed)?'validate':state?.failed; }
+function failedStep() { return ['capture_validation','validate_move','return_observation'].includes(state?.failed)?'validate':state?.failed; }
 function validationPose(pose) { return pose ? pose.map((v,i)=>`${['X','Y','Z','RX','RY','RZ'][i]}: ${(i<3?v*1000:v).toFixed(i<3?2:5)} ${i<3?'mm':'rad'}`).join('\n') : ''; }
 function renderValidation(p,busy) {
   const v=dirty?null:p?.validation;
-  const fresh=v?.status==='captured'&&Date.now()/1000-v.timestamp>=0&&Date.now()/1000-v.timestamp<=60;
+  const fresh=v?.validation_mode==='fixed_z'&&v?.status==='captured'&&Date.now()/1000-v.timestamp>=0&&Date.now()/1000-v.timestamp<=60;
+  const canReturn=!busy&&!dirty&&connectionOK&&!!p?.observation;
+  $('observation-return').disabled=!canReturn||!$('observation-return-confirmed').checked;
+  $('observation-return-confirmed').disabled=!canReturn;
+  $('observation-return-speed').disabled=busy;
+  const returned=state.return_result;
+  $('observation-return-result').textContent=state.busy==='return_observation'?'Returning to the saved observation joints…':returned
+    ? returned.status+(returned.message?' · '+returned.message:'')+(returned.joint_error_deg!==undefined?` · maximum joint error ${returned.joint_error_deg.toFixed(3)}°`:'')
+    : '';
   $('validation-capture').disabled=busy||dirty||!connectionOK||!p?.flow.taught;
   $('validation-move').disabled=busy||!connectionOK||!fresh||!$('validation-confirmed').checked;
   $('validation-confirmed').disabled=busy||!fresh;
@@ -103,7 +115,7 @@ function renderValidation(p,busy) {
   if(v) {
     $('validation-marker-pose').textContent=validationPose(v.marker_tcp_pose_m_rad);
     $('validation-pick-pose').textContent=validationPose(v.pick_tcp_pose_m_rad);
-    $('validation-approach-pose').textContent=validationPose(v.approach_tcp_pose_m_rad);
+    $('validation-target-pose').textContent=validationPose(v.validation_tcp_pose_m_rad);
     const r=v.validation;
     $('validation-change').textContent=`Pick shift: ${r.shift_from_taught_mm.toFixed(2)} mm\nPick rotation: ${r.rotation_from_taught_deg.toFixed(2)}°\nMarker yaw: ${r.marker_yaw_change_deg.toFixed(2)}°`;
     $('validation-quality').textContent=`${v.quality.frames_accepted} accepted frames · fit ${v.quality.reprojection_rmse_px.toFixed(3)} px`;
@@ -129,7 +141,7 @@ function render() {
   const ready={configure:!!p,capture:!!f.captured,teach:!!f.taught,locate:!!f.exported,validate:p?.validation?.status==='completed'&&p.validation.visual_result==='aligned'};
   for(const step of steps) {
     const light=$('light-'+step); let status=dirty?'pending':ready[step]?'ready':'pending';
-    if(state.busy===step||step==='validate'&&['capture_validation','validate_move'].includes(state.busy)) status='running';
+    if(state.busy===step||step==='validate'&&['capture_validation','validate_move','return_observation'].includes(state.busy)) status='running';
     if(state.error&&failedStep()===step) status='failed';
     if(step==='validate'&&p?.validation?.visual_result==='misaligned') status='failed';
     light.className='light '+status; light.textContent='● '+({pending:'Pending',ready:'Ready',running:'Running',failed:'Failed'}[status]);
@@ -159,9 +171,10 @@ async function post(action,body) {
   try {
     previousResult='';
     render();
+    if(['validation/move','validation/return'].includes(action)) await request('/api/validation/heartbeat',{});
     await request('/api/'+action,body); dirty=false;
     if(action==='capture') $('marker_unchanged').checked=false;
-    message(action==='configure'?'Setup ready. Continue to step 2.':action==='validation/move'?'Validation motion requested. Keep this tab active; Stop motion is available above.':'Working — keep the robot stationary.');
+    message(action==='configure'?'Setup ready. Continue to step 2.':['validation/move','validation/return'].includes(action)?'Motion requested. Keep this tab active; Stop motion is available above.':'Working — keep the robot stationary.');
     await poll();
     if(action==='configure'&&!state.error) { activeStep=availableStep(); restoreCapture(); }
   } catch(e) { message(e.message,true); }
@@ -174,7 +187,7 @@ async function poll() {
     const resultKey=JSON.stringify([state.completed,state.failed,state.error]);
     if(!state.busy && resultKey!==previousResult && !dirty) {
       if(state.error) message(state.error,true);
-      else if(state.completed) message({configure:'Setup ready. Continue to step 2.',capture:'Marker captured. Keep it fixed and teach the pick endpoint in step 3.',teach:'Picking position saved. Return to the saved observation joints for step 4.',locate:'Fresh poses exported. Continue to step 5 to validate with an approach move.',capture_validation:'Validation capture ready. Review the target and clear path before motion.',validate_move:'Approach motion completed. Check visual alignment and record the result.'}[state.completed]);
+      else if(state.completed) message({configure:'Setup ready. Continue to step 2.',capture:'Marker captured. Keep it fixed and teach the pick endpoint in step 3.',teach:'Picking position saved. Return to the saved observation joints for step 4.',locate:'Fresh poses exported. Continue to step 5 to validate tracking at fixed Z.',capture_validation:'Validation capture ready. Review the target and clear path before motion.',validate_move:'Fixed-height motion completed. Check visual alignment and record the result.',return_observation:'Returned to the saved observation joints. Choose Capture for validation.'}[state.completed]);
       if(['capture','locate'].includes(state.completed)||['capture','locate'].includes(state.failed)) {
         $('capture-image').src='/api/image?v='+(++imageVersion); $('capture-image').hidden=false;
       }
@@ -214,29 +227,49 @@ $('setup').addEventListener('input',()=>{dirty=true;activeStep=0;targetFields();
 $('tcp_confirmed').addEventListener('input',e=>{e.stopPropagation();render();});
 $('calibration').addEventListener('change',()=>{const item=defaults.calibrations.find(c=>c.path===$('calibration').value);if(item){$('tcp').value=tcpText(item.tcp);$('robot_ip').value=item.robot_ip;}showCalibrationTCP();});
 $('kind').addEventListener('change',targetFields);
+$('picking-board').addEventListener('input',()=>{
+  const value=$('picking-board').value;
+  const board=value===''?null:defaults.picking_boards[Number(value)];
+  if(board) { $('manifest').value=board.target.board_manifest; $('board').value=board.target.board; }
+  targetFields();
+});
+$('manifest').addEventListener('change',targetFields);
+$('board').addEventListener('change',targetFields);
 $('marker_unchanged').addEventListener('change',render);
 $('capture').addEventListener('click',()=>post('capture',{}));
 $('teach').addEventListener('click',()=>post('teach',{marker_unchanged:$('marker_unchanged').checked}));
 $('locate').addEventListener('click',()=>post('locate',{}));
 $('validation-capture').addEventListener('click',()=>{ $('validation-confirmed').checked=false; post('validation/capture',{}); });
 $('validation-confirmed').addEventListener('change',render);
-for(const id of ['validation-speed','validation-workspace-min','validation-workspace-max']) $(id).addEventListener('input',()=>{$('validation-confirmed').checked=false;render();});
+function workspace(id) {
+  const text=$(id).value.trim(), values=text.split(/[\s,]+/).map(Number);
+  if(!text||values.length!==3||!values.every(Number.isFinite)) throw new Error('Workspace needs three XYZ numbers in millimetres.');
+  return values.map(v=>v/1000);
+}
+$('observation-return-confirmed').addEventListener('change',render);
+for(const id of ['validation-speed','validation-workspace-min','validation-workspace-max','observation-return-speed']) $(id).addEventListener('input',()=>{$('validation-confirmed').checked=false;$('observation-return-confirmed').checked=false;render();});
+$('observation-return').addEventListener('click',async()=>{
+  try {
+    const body={path_confirmed:$('observation-return-confirmed').checked,
+      joint_speed_deg_s:Number($('observation-return-speed').value),
+      workspace_min_m:workspace('validation-workspace-min'),workspace_max_m:workspace('validation-workspace-max')};
+    $('observation-return-confirmed').checked=false;
+    $('validation-confirmed').checked=false;
+    state.return_result=null;
+    await post('validation/return',body);
+  } catch(e) { message(e.message,true); }
+});
 $('validation-move').addEventListener('click',async()=>{
   try {
-    function workspace(id) {
-      const text=$(id).value.trim(), values=text.split(/[\s,]+/).map(Number);
-      if(!text||values.length!==3||!values.every(Number.isFinite)) throw new Error('Workspace needs three XYZ numbers in millimetres.');
-      return values.map(v=>v/1000);
-    }
     const body={capture_id:state.project.validation.id,path_confirmed:$('validation-confirmed').checked,
       speed_mm_s:Number($('validation-speed').value),workspace_min_m:workspace('validation-workspace-min'),workspace_max_m:workspace('validation-workspace-max')};
-    await request('/api/validation/heartbeat',{});
     $('validation-confirmed').checked=false;
     await post('validation/move',body);
   } catch(e) { message(e.message,true); }
 });
 async function stopValidation() {
   $('validation-confirmed').checked=false;
+  $('observation-return-confirmed').checked=false;
   try { await request('/api/validation/stop',{}); await poll(); message('Stop requested. Capture again before another motion attempt.'); }
   catch(e) { message('Stop request could not reach the teacher. Use the pendant stop: '+e.message,true); }
 }
@@ -246,11 +279,16 @@ for(const [id,result] of [['validation-aligned','aligned'],['validation-misalign
   catch(e) { message(e.message,true); }
 });
 $('validation-image').addEventListener('error',()=>{$('validation-image').hidden=true;$('validation-placeholder').hidden=false;});
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&state?.busy==='validate_move') stopValidation();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&['validate_move','return_observation'].includes(state?.busy)) stopValidation();});
 $('capture-image').addEventListener('error',()=>{$('capture-image').hidden=true;render();});
 (async()=>{
   try {
     defaults=await request('/api/defaults');
+    for(const [index,board] of (defaults.picking_boards||[]).entries()) {
+      const option=document.createElement('option'); option.value=String(index);
+      option.textContent=board.target.board+' · '+board.dimensions_mm.join(' × ')+' mm · '+board.dictionary;
+      $('picking-board').append(option);
+    }
     for(const [id,items] of [['calibrations',defaults.calibrations.map(c=>c.path)],['manifests',defaults.manifests]])
       for(const item of items){const option=document.createElement('option');option.value=item;$(id).append(option);}
     await poll();
@@ -259,6 +297,6 @@ $('capture-image').addEventListener('error',()=>{$('capture-image').hidden=true;
     restoreCapture();
     render();
     setInterval(poll,700);
-    setInterval(()=>{if(!document.hidden&&state?.busy==='validate_move') request('/api/validation/heartbeat',{}).catch(()=>{});},300);
+    setInterval(()=>{if(!document.hidden&&['validate_move','return_observation'].includes(state?.busy)) request('/api/validation/heartbeat',{}).catch(()=>{});},300);
   } catch(e){message(e.message,true);}
 })();

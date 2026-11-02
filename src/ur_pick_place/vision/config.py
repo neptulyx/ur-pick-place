@@ -99,8 +99,8 @@ class Refine:
 
 @dataclass
 class Limits:
-    max_shift_mm: float = 30.0
-    max_rotation_deg: float = 15.0
+    max_shift_mm: float = 100.0
+    max_rotation_deg: float = 180.0
     max_tilt_change_deg: float = 10.0
     max_height_change_mm: float = 10.0
     max_tool_tilt_deg: float = 20.0

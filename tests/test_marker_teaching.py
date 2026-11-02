@@ -15,7 +15,7 @@ from test_vision_pipeline import FakeRuntime, World
 from test_vision_detection import HAVE_CHARUCO
 from ur_pick_place.vision.grasp import load_taught
 from ur_pick_place.vision.errors import VisionError
-from ur_pick_place.vision.teaching import TeachingProject, defaults, read_json
+from ur_pick_place.vision.teaching import TeachingProject, defaults, picking_boards, read_json
 from ur_pick_place.vision.teach_ui import TeachingService, TeachingServer
 from ur_pick_place.vision.transforms import pose_to_matrix
 
@@ -85,7 +85,7 @@ class MarkerTeachingTests(unittest.TestCase):
     def test_failed_new_read_removes_old_target_files(self):
         self.capture_and_teach()
         self.project.locate()
-        self.world.move_pick(100, 0, 0)
+        self.world.move_pick(150, 0, 0)
         with self.assertRaisesRegex(VisionError, 'target refused'):
             self.project.locate()
         self.assertFalse(self.project.flow['exported'])
@@ -103,6 +103,13 @@ class MarkerTeachingTests(unittest.TestCase):
         record = self.project.capture_validation()
         expected = self.world.pick @ MARKER_TCP
         np.testing.assert_allclose(pose_to_matrix(record['pick_tcp_pose_m_rad']), expected, atol=.002)
+        self.assertEqual(record['validation_mode'], 'fixed_z')
+        target = record['validation_tcp_pose_m_rad']
+        pick = record['pick_tcp_pose_m_rad']
+        self.assertEqual(target[:2] + target[3:], pick[:2] + pick[3:])
+        self.assertEqual(target[2], record['capture_robot']['tcp_pose_m_rad'][2])
+        self.assertNotAlmostEqual(target[2], record['approach_tcp_pose_m_rad'][2])
+        self.assertAlmostEqual(record['approach_tcp_pose_m_rad'][2] - pick[2], .1)
         self.assertAlmostEqual(record['validation']['marker_yaw_change_deg'], 5, delta=.3)
         self.assertEqual((self.project.directory / 'observation.json').read_bytes(), reference)
         self.assertEqual((self.project.directory / 'grasp_pick.json').read_bytes(), grasp)
@@ -113,12 +120,33 @@ class MarkerTeachingTests(unittest.TestCase):
         reopened = TeachingProject(self.settings, runtime=self.runtime)
         self.assertIsNone(reopened.validation)
         self.assertEqual(reopened.validation_history[0]['visual_result'], 'aligned')
-        self.world.move_pick(100, 0, 0)
+        self.world.move_pick(150, 0, 0)
         with self.assertRaises(VisionError):
             self.project.capture_validation()
         self.assertIsNone(self.project.validation)
         self.assertFalse((self.project.directory / 'validation_capture.json').exists())
         self.assertEqual((self.project.directory / 'target.json').read_bytes(), exported)
+
+    def test_reopened_taught_project_can_validate_without_fresh_export(self):
+        self.capture_and_teach()
+        self.project.locate()
+        reference = (self.project.directory / 'observation.json').read_bytes()
+        grasp = (self.project.directory / 'grasp_pick.json').read_bytes()
+        exported = (self.project.directory / 'target.json').read_bytes()
+        reopened = TeachingProject(self.settings, runtime=self.runtime)
+        reopened.config.robot.settle_s = 0
+        reopened.config.quality.frames = 3
+        self.assertTrue(reopened.flow['taught'])
+        self.assertFalse(reopened.flow['exported'])
+        self.assertIsNone(reopened.validation)
+        self.world.move_pick(8, -6, 5)
+        record = reopened.capture_validation()
+        self.assertEqual(record['status'], 'captured')
+        self.assertFalse(reopened.flow['exported'])
+        self.assertEqual((self.project.directory / 'observation.json').read_bytes(), reference)
+        self.assertEqual((self.project.directory / 'grasp_pick.json').read_bytes(), grasp)
+        self.assertEqual((self.project.directory / 'target.json').read_bytes(), exported)
+        self.assertEqual(set(self.runtime.calls), {'receive', 'camera'})
 
     def test_capture_again_invalidates_taught_offset(self):
         self.capture_and_teach()
@@ -207,6 +235,37 @@ class MarkerTeachingTests(unittest.TestCase):
         self.assertEqual(discovered['settings']['tcp'], tcp)
         self.assertFalse(self.runtime.calls)
 
+    def test_defaults_choose_80_mm_picking_board_and_remember_captured_target(self):
+        def board(name, size):
+            return dict(target=dict(kind='charuco', board_manifest='/tmp/'+name+'.json', board=name),
+                        dimensions_mm=size, dictionary='DICT_6X6_250', marker_ids=[1, 2])
+        calibration = board('calibration_stage2', [80, 80])
+        tank01, tank15 = board('tank01', [80, 80]), board('tank15', [80, 80])
+        with patch('ur_pick_place.vision.teaching.picking_boards', return_value=[calibration, tank01, tank15]):
+            self.assertEqual(defaults(self.root)['settings']['target'], tank01['target'])
+            path = self.root / 'data' / 'marker-teaching' / 'saved' / 'project.json'
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(dict(flow=dict(captured=True), settings=dict(target=tank15['target']))))
+            discovered = defaults(self.root)
+            self.assertEqual(discovered['settings']['target'], tank15['target'])
+            self.assertNotEqual(discovered['settings']['project'], str(path.parent))
+            self.assertEqual(len(discovered['picking_boards']), 3)
+        with patch('ur_pick_place.vision.teaching.picking_boards', return_value=[calibration]):
+            self.assertEqual(defaults(self.root)['settings']['target']['board'], '')
+        self.assertFalse(self.runtime.calls)
+
+    @unittest.skipUnless(HAVE_CHARUCO, 'charuco-generator/charuco-realsense not installed')
+    def test_picking_board_catalog_includes_dimensions_and_skips_bad_manifest(self):
+        from test_vision_detection import charuco_target
+        target = charuco_target(self.root)
+        invalid = self.root / 'invalid.json'
+        invalid.write_text('{}')
+        catalog = picking_boards([str(invalid), str(self.root / 'board_manifest.json')])
+        entry = next(b for b in catalog if b['target']['board'] == 'front')
+        self.assertEqual(entry['dimensions_mm'], target.record['pattern_dimensions_mm'])
+        self.assertEqual(entry['marker_ids'], target.record['marker_ids'])
+        self.assertFalse(self.runtime.calls)
+
     @unittest.skipUnless(HAVE_CHARUCO, 'charuco-generator/charuco-realsense not installed')
     def test_charuco_capture_uses_same_teaching_pipeline(self):
         from vision_sim import FakeCamera, camera_view_point, face_up
@@ -249,6 +308,34 @@ class MarkerTeachingTests(unittest.TestCase):
         result = self.project.locate()
         self.assertEqual(result['target']['marker_length_mm'], 80)
         self.assertGreater(result['quality']['pixels_per_module'], 5)
+
+    @unittest.skipUnless(HAVE_CHARUCO, 'charuco-generator/charuco-realsense not installed')
+    def test_80_mm_tank15_charuco_capture_teach_and_export(self):
+        from charuco_generator.config import BoardSpec, Config, Geometry, Printing
+        from test_vision_detection import charuco_target
+        from vision_sim import FakeCamera, camera_view_point, face_up
+        config = Config(geometry=Geometry(dictionary='DICT_6X6_250', squares_x=4, squares_y=4,
+                                         square_length_mm=20, marker_length_mm=15),
+                        printing=Printing(), boards=(BoardSpec('tank15', 'tank15-test', tuple(range(129, 137))),))
+        target = charuco_target(self.root, config=config, board='tank15')
+        point = camera_view_point(OBSERVE_PICK, height=.12)
+        self.world.pick = face_up(point[0], point[1], z=.12)
+        self.world.pick[:3, 3] -= self.world.pick[:3, :3] @ target.centre
+        self.world.camera = FakeCamera(self.world.rtde, [(target, self.world.pick)])
+        self.runtime = FakeRuntime(self.world.rtde, self.world.camera)
+        spec = dict(kind='charuco', board_manifest=str(self.root/'board_manifest.json'), board='tank15')
+        self.project = TeachingProject(dict(self.settings, target=spec, project=str(self.root/'tank15')),
+                                       runtime=self.runtime)
+        self.project.config.robot.settle_s = 0
+        self.project.config.quality.frames = 3
+        self.capture_and_teach()
+        result = self.project.locate()
+        self.assertEqual(result['target']['board'], 'tank15')
+        self.assertEqual(result['target']['marker_ids'], list(range(129, 137)))
+        self.assertEqual(target.record['pattern_dimensions_mm'], [80, 80])
+        self.assertGreater(result['quality']['pixels_per_module'], 5)
+        np.testing.assert_allclose(pose_to_matrix(result['pick_tcp_pose_m_rad']), self.taught_pose, atol=.002)
+        self.assertFalse(self.world.rtde.events)
 
     def test_worker_launch_failure_and_timeout(self):
         service = TeachingService(self.root)
