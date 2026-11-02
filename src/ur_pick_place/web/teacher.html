@@ -35,8 +35,11 @@
 <section id="step-teach" aria-labelledby="title-teach" hidden><div class="section-heading"><span class="eyebrow">STEP 3 OF 5</span><h2 id="title-teach" tabindex="-1">Teach the picking position</h2><p>Keep the marker fixed. Move the gripper to the final pick endpoint.</p></div>
 <ol class="instructions"><li><strong>Position the gripper</strong><span>Jog with the pendant to the desired position and orientation.</span></li><li><strong>Stop the arm</strong><span>Keep tool Z approximately down for a base −Z force search.</span></li><li><strong>Save the relationship</strong><span>The app records this TCP position relative to the marker.</span></li></ol>
 <label class="check confirmation"><input id="marker_unchanged" type="checkbox">The marker/object has not moved since capture.</label>
-<div class="actions"><button id="teach" class="primary" disabled>Read current TCP &amp; save pick</button><span id="light-teach" class="light">● Pending</span></div><p id="teach-result" class="result saved-result"></p><p class="hint">Teach the lower endpoint of the search. Contact may stop the descent earlier.</p></section>
-<section id="step-locate" aria-labelledby="title-locate" hidden><div class="section-heading"><span class="eyebrow">STEP 4 OF 5</span><h2 id="title-locate" tabindex="-1">Read the marker. Get your pick.</h2><p>Return to the observation pose using the pendant, then read again.</p></div>
+<div class="actions"><button id="teach" class="primary" disabled>Read current TCP &amp; save pick</button><span id="light-teach" class="light">● Pending</span></div><p id="teach-result" class="result saved-result"></p><p class="hint">Teach the lower endpoint of the search. Contact may stop the descent earlier.</p>
+<div class="actions"><button id="teach-observation-return" type="button" class="secondary" disabled>Return to observation pose</button></div>
+<p class="hint">After saving the pick, click to return to the Step 2 joints. Clear the joint-motion path first and keep this tab active. Stop motion is available above.</p>
+<p id="teach-observation-return-result" class="result"></p></section>
+<section id="step-locate" aria-labelledby="title-locate" hidden><div class="section-heading"><span class="eyebrow">STEP 4 OF 5</span><h2 id="title-locate" tabindex="-1">Read the marker. Get your pick.</h2><p>Use Return to observation pose in Step 3, then read again.</p></div>
 <div class="observation"><span class="eyebrow">RETURN TO THESE JOINTS</span><p id="observe-joints">Observation joints appear after capture.</p></div>
 <div class="actions"><button id="locate" class="primary" disabled>Read marker &amp; export poses</button><span id="light-locate" class="light">● Pending</span></div>
 <div id="export-result" hidden><div class="poses"><div><h3>Pick endpoint</h3><pre id="pick-pose"></pre><a href="/api/download/target.json" class="download">↓ Pick pose JSON</a></div><div><h3>Approach above pick</h3><pre id="approach-pose"></pre><span class="pose-note">Along robot-base +Z</span></div></div><div class="downloads"><a href="/api/download/target.script">URScript variables</a><a href="/api/download/pick_target.json">Full report</a></div><p class="hint">Base frame · metres / rotation-vector radians. Re-read for each pick.</p></div>
@@ -44,13 +47,9 @@
 <section id="step-validate" aria-labelledby="title-validate" hidden>
 <div class="section-heading"><span class="eyebrow">STEP 5 OF 5</span><h2 id="title-validate" tabindex="-1">Validate with the robot</h2><p>Reposition the marker and its object together. Return to the saved observation joints, then stop and capture. The test follows the calculated pick in XY and orientation, keeping the TCP Z height recorded at capture.</p></div>
 <p id="validation-observe-joints" class="result"></p>
-<div class="observation">
-<label>Return joint speed (degrees/s)<input id="observation-return-speed" type="number" min="1" max="6" step="1" value="3"></label>
-<label class="check"><input id="observation-return-confirmed" type="checkbox">I checked that the robot's joint-motion path back to the saved observation pose is clear.</label>
 <div class="actions"><button id="observation-return" type="button" class="secondary" disabled>Return to observation pose</button></div>
-<p class="hint">Uses the saved Step 2 joints and the workspace bounds below. Workspace checks cover the start and target, not the joint trajectory or obstacles. This joint move can change TCP Z; the fixed-Z rule applies to the subsequent validation move. Keep this tab active. Stop motion stops either move. Return does not capture automatically.</p>
+<p class="hint">Click to return to the Step 2 joints. Clear the joint-motion path first and keep this tab active. Stop motion is available above. Return does not capture automatically.</p>
 <p id="observation-return-result" class="result"></p>
-</div>
 <div class="camera-stage"><p id="validation-placeholder">Capture the marker to review its new pose.</p><img id="validation-image" alt="Validation marker capture with detected coordinate axes" hidden></div>
 <div class="actions"><button id="validation-capture" type="button" class="primary" disabled>Capture for validation</button><span id="light-validate" class="light">● Pending</span></div>
 <div id="validation-preview" hidden>
@@ -61,9 +60,10 @@
 </div>
 <details id="validation-settings" open><summary>Test motion settings</summary><div class="fields">
 <label>Speed (mm/s)<input id="validation-speed" type="number" min="1" max="20" step="1" value="10"></label>
+<label>Return joint speed (degrees/s)<input id="observation-return-speed" type="number" min="1" max="6" step="1" value="3"></label>
 <label>Workspace minimum XYZ (mm)<input id="validation-workspace-min" value="-900, -900, 20"></label>
 <label class="wide">Workspace maximum XYZ (mm)<input id="validation-workspace-max" value="900, 900, 1200"></label>
-</div><p class="hint">Set these bounds for your cell. The start and target must fit inside them. Robot safety and reachability checks also apply; these checks do not detect obstacles along the path.</p></details>
+</div><p class="hint">Return speed and workspace bounds apply to both return buttons in Steps 3 and 5. The start and target must fit inside these bounds; checks do not detect obstacles or constrain the whole joint trajectory. Return can change TCP Z; fixed-Z validation holds the captured height.</p></details>
 <label class="check confirmation"><input id="validation-confirmed" type="checkbox">The marker/object has stayed fixed since this capture. I reviewed the target, workspace and clear linear path at the captured TCP height.</label>
 <div class="actions"><button id="validation-move" type="button" class="primary" disabled>Move at fixed Z</button></div>
 <p class="hint">One slow linear move following the calculated pick XY and orientation, with TCP Z held at its captured height. The approach-height setting does not apply to this test. Keep this tab active during motion. Each attempt requires a fresh capture within 60 seconds. Use Return to observation pose before capturing another test.</p>

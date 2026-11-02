@@ -91,19 +91,23 @@ function restoreCapture() {
   }
 }
 function poseText(pose) { return pose ? '['+pose.map(v=>v.toFixed(6)).join(', ')+']' : ''; }
-function failedStep() { return ['capture_validation','validate_move','return_observation'].includes(state?.failed)?'validate':state?.failed; }
+function failedStep() {
+  if(state?.failed==='return_observation') return activeStep===2?'teach':'validate';
+  return ['capture_validation','validate_move'].includes(state?.failed)?'validate':state?.failed;
+}
 function validationPose(pose) { return pose ? pose.map((v,i)=>`${['X','Y','Z','RX','RY','RZ'][i]}: ${(i<3?v*1000:v).toFixed(i<3?2:5)} ${i<3?'mm':'rad'}`).join('\n') : ''; }
 function renderValidation(p,busy) {
   const v=dirty?null:p?.validation;
   const fresh=v?.validation_mode==='fixed_z'&&v?.status==='captured'&&Date.now()/1000-v.timestamp>=0&&Date.now()/1000-v.timestamp<=60;
   const canReturn=!busy&&!dirty&&connectionOK&&!!p?.observation;
-  $('observation-return').disabled=!canReturn||!$('observation-return-confirmed').checked;
-  $('observation-return-confirmed').disabled=!canReturn;
+  $('observation-return').disabled=!canReturn;
+  $('teach-observation-return').disabled=!canReturn||!p?.flow.taught;
   $('observation-return-speed').disabled=busy;
   const returned=state.return_result;
-  $('observation-return-result').textContent=state.busy==='return_observation'?'Returning to the saved observation joints…':returned
+  const returnText=state.busy==='return_observation'?'Returning to the saved observation joints…':returned
     ? returned.status+(returned.message?' · '+returned.message:'')+(returned.joint_error_deg!==undefined?` · maximum joint error ${returned.joint_error_deg.toFixed(3)}°`:'')
     : '';
+  for(const id of ['observation-return-result','teach-observation-return-result']) $(id).textContent=returnText;
   $('validation-capture').disabled=busy||dirty||!connectionOK||!p?.flow.taught;
   $('validation-move').disabled=busy||!connectionOK||!fresh||!$('validation-confirmed').checked;
   $('validation-confirmed').disabled=busy||!fresh;
@@ -141,7 +145,8 @@ function render() {
   const ready={configure:!!p,capture:!!f.captured,teach:!!f.taught,locate:!!f.exported,validate:p?.validation?.status==='completed'&&p.validation.visual_result==='aligned'};
   for(const step of steps) {
     const light=$('light-'+step); let status=dirty?'pending':ready[step]?'ready':'pending';
-    if(state.busy===step||step==='validate'&&['capture_validation','validate_move','return_observation'].includes(state.busy)) status='running';
+    if(state.busy===step||step==='validate'&&['capture_validation','validate_move'].includes(state.busy)
+        ||state.busy==='return_observation'&&step===(activeStep===2?'teach':'validate')) status='running';
     if(state.error&&failedStep()===step) status='failed';
     if(step==='validate'&&p?.validation?.visual_result==='misaligned') status='failed';
     light.className='light '+status; light.textContent='● '+({pending:'Pending',ready:'Ready',running:'Running',failed:'Failed'}[status]);
@@ -187,7 +192,7 @@ async function poll() {
     const resultKey=JSON.stringify([state.completed,state.failed,state.error]);
     if(!state.busy && resultKey!==previousResult && !dirty) {
       if(state.error) message(state.error,true);
-      else if(state.completed) message({configure:'Setup ready. Continue to step 2.',capture:'Marker captured. Keep it fixed and teach the pick endpoint in step 3.',teach:'Picking position saved. Return to the saved observation joints for step 4.',locate:'Fresh poses exported. Continue to step 5 to validate tracking at fixed Z.',capture_validation:'Validation capture ready. Review the target and clear path before motion.',validate_move:'Fixed-height motion completed. Check visual alignment and record the result.',return_observation:'Returned to the saved observation joints. Choose Capture for validation.'}[state.completed]);
+      else if(state.completed) message({configure:'Setup ready. Continue to step 2.',capture:'Marker captured. Keep it fixed and teach the pick endpoint in step 3.',teach:'Picking position saved. Use Return to observation pose before step 4.',locate:'Fresh poses exported. Continue to step 5 to validate tracking at fixed Z.',capture_validation:'Validation capture ready. Review the target and clear path before motion.',validate_move:'Fixed-height motion completed. Check visual alignment and record the result.',return_observation:activeStep===2?'Returned to the saved observation joints. Continue to step 4 to read and export.':'Returned to the saved observation joints. Choose Capture for validation.'}[state.completed]);
       if(['capture','locate'].includes(state.completed)||['capture','locate'].includes(state.failed)) {
         $('capture-image').src='/api/image?v='+(++imageVersion); $('capture-image').hidden=false;
       }
@@ -246,19 +251,18 @@ function workspace(id) {
   if(!text||values.length!==3||!values.every(Number.isFinite)) throw new Error('Workspace needs three XYZ numbers in millimetres.');
   return values.map(v=>v/1000);
 }
-$('observation-return-confirmed').addEventListener('change',render);
-for(const id of ['validation-speed','validation-workspace-min','validation-workspace-max','observation-return-speed']) $(id).addEventListener('input',()=>{$('validation-confirmed').checked=false;$('observation-return-confirmed').checked=false;render();});
-$('observation-return').addEventListener('click',async()=>{
+for(const id of ['validation-speed','validation-workspace-min','validation-workspace-max','observation-return-speed']) $(id).addEventListener('input',()=>{$('validation-confirmed').checked=false;render();});
+async function returnToObservation(){
   try {
-    const body={path_confirmed:$('observation-return-confirmed').checked,
+    const body={path_confirmed:true,
       joint_speed_deg_s:Number($('observation-return-speed').value),
       workspace_min_m:workspace('validation-workspace-min'),workspace_max_m:workspace('validation-workspace-max')};
-    $('observation-return-confirmed').checked=false;
     $('validation-confirmed').checked=false;
     state.return_result=null;
     await post('validation/return',body);
   } catch(e) { message(e.message,true); }
-});
+}
+for(const id of ['observation-return','teach-observation-return']) $(id).addEventListener('click',returnToObservation);
 $('validation-move').addEventListener('click',async()=>{
   try {
     const body={capture_id:state.project.validation.id,path_confirmed:$('validation-confirmed').checked,
@@ -269,7 +273,6 @@ $('validation-move').addEventListener('click',async()=>{
 });
 async function stopValidation() {
   $('validation-confirmed').checked=false;
-  $('observation-return-confirmed').checked=false;
   try { await request('/api/validation/stop',{}); await poll(); message('Stop requested. Capture again before another motion attempt.'); }
   catch(e) { message('Stop request could not reach the teacher. Use the pendant stop: '+e.message,true); }
 }

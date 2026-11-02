@@ -107,27 +107,32 @@ async function screenshot(filename){
   await click('tcp_confirmed');await click('configure');
   await wait('!document.getElementById("step-capture").hidden','setup complete');
   await click('capture');await wait('document.getElementById("light-capture").textContent==="● Ready"','reference capture');
-  await click('next');await click('marker_unchanged');await click('teach');
+  await click('next');
+  assert.equal(await evaluate('document.getElementById("teach-observation-return").disabled'),true);
+  await click('marker_unchanged');await click('teach');
   await wait('document.getElementById("light-teach").textContent==="● Ready"','teach complete');
+  await returnToObservation('teach-observation-return','teach-observation-return-result');
+  assert.equal(await evaluate('document.getElementById("step-teach").hidden'),false);
   await click('next');await click('locate');
   await wait('document.getElementById("light-locate").textContent==="● Ready"','read/export complete');
   const original=(await api('/__test__/metrics')).body;
   await click('next');assert.equal(await evaluate('document.getElementById("step-counter").textContent'),'Step 5 of 5');
 
-  async function returnToObservation(){
-    assert.equal(await evaluate('document.getElementById("observation-return").disabled'),true);
-    await click('observation-return-confirmed');
-    await click('observation-return');
-    await wait('document.getElementById("observation-return-result").textContent.startsWith("completed")','return completion');
+  async function returnToObservation(button='observation-return',result='observation-return-result'){
+    const before=(await api('/api/state')).body.project;
+    await click(button);
+    await wait(`document.getElementById(${JSON.stringify(result)}).textContent.startsWith("completed")`,'return completion');
     const returned=(await api('/api/state')).body;
     assert.equal(returned.completed,'return_observation');
     assert.ok(returned.return_result.joint_error_deg<.1);
     assert.deepEqual(returned.return_result.actual_joints_rad,returned.project.observe_joints);
     assert.equal(returned.project.validation,null);
+    assert.deepEqual(returned.project.taught,before.taught);
+    assert.deepEqual(returned.project.observation,before.observation);
     assert.equal(await evaluate('document.getElementById("validation-move").disabled'),true);
   }
   await returnToObservation();
-  assert.equal((await api('/__test__/metrics')).body.joint_moves.length,1);
+  assert.equal((await api('/__test__/metrics')).body.joint_moves.length,2);
 
   const first=await capture({dx_mm:8,dy_mm:-6,yaw_deg:5});
   assert.ok(Math.abs(first.validation.marker_yaw_change_deg-5)<.4);
@@ -148,7 +153,7 @@ async function screenshot(filename){
   const replay=await api('/api/validation/move',{capture_id:first.id,path_confirmed:true,speed_mm_s:10,workspace_min_m:[-.9,-.9,.02],workspace_max_m:[.9,.9,1.2]});assert.equal(replay.status,400);
 
   await returnToObservation();
-  assert.equal((await api('/__test__/metrics')).body.joint_moves.length,2);
+  assert.equal((await api('/__test__/metrics')).body.joint_moves.length,3);
 
   const second=await capture({dx_mm:-6,dy_mm:3,yaw_deg:-4});assert.notEqual(first.id,second.id);
   await move();await result('completed');await click('validation-misaligned');
