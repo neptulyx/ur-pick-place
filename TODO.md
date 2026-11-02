@@ -1,0 +1,7 @@
+# Open work for review
+
+- Prepare full robot, tool, camera, payload and environment geometry and swept-path collision checking, with measured transforms and exclusions. Prepare native UR tool envelopes and safety planes as an additional layer; native tool spheres/planes do not solve tool-vs-wrist mesh collision. Keep planning on the Interface PC; no ROS runtime is proposed. See [UR Tool Position](https://www.universal-robots.com/manuals/EN/HTML/SW5_19/Content/prod-usr-man/software/PolyScope/content/safety_g5/Tool_position_g5_en.htm), [UR Safety Planes](https://www.universal-robots.com/manuals/EN/HTML/SW5_19/Content/prod-usr-man/complianceUR16e/H_g5_sections/firstuse/Planes_g5_en.htm), [FCL](https://github.com/flexible-collision-library/fcl), and the reference [anobot revision](https://github.com/khkoh23/anobot/tree/82206d330cf300db9b24aa9f24b2633a92e9db8f). Reference geometry needs measurement and review; do not copy its meshes here.
+- Show both staged-motion endpoints before approval; record each stage's target, actual endpoint and status, including partial attempts.
+- Make ChArUco test fixtures portable: three tests currently depend on an adjacent generator checkout.
+- Keep the teacher minimum Z of 10 mm and hand-eye half camera angles clearly identified as bench-specific; decide their reusable default policy separately.
+- Measure pick alignment independently and complete a full gripper pick/release cycle. Commanded-pose following alone cannot establish camera-to-item accuracy.

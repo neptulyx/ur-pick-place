@@ -61,7 +61,7 @@
 <details id="validation-settings" open><summary>Test motion settings</summary><div class="fields">
 <label>Speed (mm/s)<input id="validation-speed" type="number" min="1" max="20" step="1" value="10"></label>
 <label>Return joint speed (degrees/s)<input id="observation-return-speed" type="number" min="1" max="6" step="1" value="3"></label>
-<label>Workspace minimum XYZ (mm)<input id="validation-workspace-min" value="-900, -900, 20"></label>
+<label>Workspace minimum XYZ (mm)<input id="validation-workspace-min" value="-900, -900, 10"></label>
 <label class="wide">Workspace maximum XYZ (mm)<input id="validation-workspace-max" value="900, 900, 1200"></label>
 </div><p class="hint">Return speed and workspace bounds apply to both return buttons in Steps 3 and 5. The start and target must fit inside these bounds; checks do not detect obstacles or constrain the whole joint trajectory. Return and full 3D validation can change TCP Z. Planar validation holds the captured height.</p></details>
 <label class="check confirmation"><input id="validation-confirmed" type="checkbox"><span id="validation-confirmation-text">The AGV and marker/object have stayed fixed since capture. I reviewed the target, workspace and clear linear path.</span></label>
