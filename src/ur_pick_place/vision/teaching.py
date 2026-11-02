@@ -27,7 +27,7 @@ from .robot_state import ReceivePoseSource, require_stationary
 from .targets import same_target, target_from_config
 from .transforms import matrix_to_pose
 
-VERSION = '0.2.8'
+VERSION = '0.2.9'
 
 
 def digest(path):

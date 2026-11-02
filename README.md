@@ -49,8 +49,9 @@ lights. Project paths and movement limits live under **Project & advanced settin
    A multi-frame quality check and image with coordinate axes confirm the result.
 3. **Teach:** keep the object/marker fixed. Pendant-jog the gripper to the desired
    final pick endpoint, including orientation. Stop, confirm the marker stayed
-   fixed, and click **Read current TCP & save pick**.
-4. **Read/export:** return to the saved observation joints with the pendant.
+   fixed, and click **Read current TCP & save pick**. Once saved, click
+   **Return to observation pose** to restore the Step 2 joint positions.
+4. **Read/export:** after returning with the Step 3 button, continue to step 4.
    Re-read the marker to calculate a fresh pick endpoint and an approach **100 mm
    above it along robot-base +Z**. Green lights indicate completed steps.
 5. **Validation:** reposition the marker and object together, return to the saved
@@ -58,6 +59,9 @@ lights. Project paths and movement limits live under **Project & advanced settin
    **Return to observation pose** button after checking the joint-motion path and
    workspace bounds. Return speed defaults to 3°/s (range 1–6°/s). This uses the
    saved Step 2 joint angles, can change TCP Z, and does not capture automatically.
+   Both Steps 3 and 5 use a single-click return button without a separate checkbox;
+   check the path is clear before clicking. Shared return speed and workspace bounds
+   are under Step 5's **Test motion settings**.
    Stop motion and the active-tab heartbeat apply to return moves too.
    Review the captured image/axes, marker pose, calculated pick and fixed-height validation target, and
    displacement/rotation from teaching. The validation target follows the pick XY
