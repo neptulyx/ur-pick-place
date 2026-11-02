@@ -32,6 +32,12 @@ The interface shows one step at a time with Back/Next navigation and completion
 lights. Project paths and movement limits live under **Project & advanced settings**.
 
 1. **Set up:** choose your `calibration.json`, robot IP and ChArUco board manifest/name.
+   The saved hand-eye calibration supplies the camera-to-robot transform. Use
+   **Printed picking board** to select the target on your object separately;
+   for the 80 × 80 mm tank labels, choose `tank01`–`tank16` matching your print
+   (the current cell uses `tank15`). New projects prefer an 80 × 80 mm board and
+   remember the most recently captured picking target. The calibration board
+   is not needed in the camera view during picking.
    A single ArUco marker is also supported: enter dictionary, ID and its measured
    outer black side length (for example, 80 mm). Check the active gripper TCP.
    Enter its XYZ offset in **millimetres** and RX/RY/RZ in **rotation-vector radians**,
@@ -48,13 +54,21 @@ lights. Project paths and movement limits live under **Project & advanced settin
    Re-read the marker to calculate a fresh pick endpoint and an approach **100 mm
    above it along robot-base +Z**. Green lights indicate completed steps.
 5. **Validation:** reposition the marker and object together, return to the saved
-   observation joints with the pendant, stop, and choose **Capture for validation**.
-   Review the captured image/axes, marker pose, calculated pick/approach poses and
-   displacement/rotation from teaching. Validation preserves the original teaching
-   reference and step-4 exports. Set the XYZ workspace bounds for your cell and a
+   observation joints, stop, and choose **Capture for validation**. Use the
+   **Return to observation pose** button after checking the joint-motion path and
+   workspace bounds. Return speed defaults to 3°/s (range 1–6°/s). This uses the
+   saved Step 2 joint angles, can change TCP Z, and does not capture automatically.
+   Stop motion and the active-tab heartbeat apply to return moves too.
+   Review the captured image/axes, marker pose, calculated pick and fixed-height validation target, and
+   displacement/rotation from teaching. The validation target follows the pick XY
+   and orientation while holding TCP Z at the height recorded by this capture;
+   the step-1 approach height applies to exports, not this validation move. Validation preserves the original teaching
+   reference and step-4 exports. A saved taught pick unlocks this step, including
+   after reopening a project; a fresh step-4 export is not required because
+   validation captures its own image. Set the XYZ workspace bounds for your cell and a
    test speed (default 10 mm/s, maximum 20 mm/s), confirm the marker stayed fixed
-   and the linear path is clear, then choose **Move to approach position**.
-   This commands one linear move above the pick; it does not descend or operate
+   and the linear path is clear, then choose **Move at fixed Z**.
+   This commands one linear move at the captured TCP height without operating
    the gripper. Keep the tab active. **Stop motion** stays visible in the header;
    losing the UI heartbeat stops motion. This is a software stop, not an emergency
    stop. Workspace/robot checks do not check for whole-arm or path collisions.
@@ -62,11 +76,11 @@ lights. Project paths and movement limits live under **Project & advanced settin
    Each motion attempt consumes one validation capture, which expires after
    60 seconds. The active TCP, unchanged calibration/grasp, stationary starting
    robot, starting pose, workspace, robot safety limits and inverse kinematics
-   are checked before motion. Return with the pendant and capture again for
-   each test. Results show measured TCP agreement with the commanded approach
+   are checked before motion. Return to observation and capture again for
+   each test. Results show measured TCP agreement with the commanded validation target
    (within 1 mm / 0.005 rad); separately record **Alignment looks correct** or
-   **Alignment needs adjustment** after checking the gripper over the intended
-   pick. Step 5 turns green only after a completed move is marked visually aligned.
+   **Alignment needs adjustment** after checking the gripper against the intended
+   pick XY and orientation at the captured height. Step 5 turns green only after a completed move is marked visually aligned.
    History is saved in `validation_history.json`; reopening a project requires a
    fresh capture before motion. TCP agreement alone does not measure camera accuracy.
 
@@ -77,7 +91,7 @@ within 20 degrees of base -Z for the existing force-guided sequence.
 
 Choose **XY + yaw** when the object moves on a flat support (the marker itself may
 be vertical). **Full 3D** follows the measured pose, within the configured limits.
-Defaults permit 30 mm target displacement, 15 degrees rotation and 10 degrees tilt
+Defaults permit 100 mm target displacement, 180 degrees rotation and 10 degrees tilt
 change; planar mode also limits height change to 10 mm. Re-teach for another
 working area. Use **Allowed movement from the taught target** in step 1 to set
 the displacement/rotation range; the execution recipe still checks its workspace.
@@ -144,7 +158,7 @@ To verify Step 5 without hardware, run:
 
 With Node.js and Google Chrome installed, this includes an isolated browser test
 of all five steps through the real HTTP server and capture subprocesses. It tests
-rotated marker detection, approach motion, visual pass/fail history, expired/used
+rotated marker detection, fixed-height tracking motion, visual pass/fail history, expired/used
 captures, TCP mismatch, Stop and network-loss heartbeat stopping. Camera images
 are rendered and every robot interface is simulated; no hardware is contacted.
 

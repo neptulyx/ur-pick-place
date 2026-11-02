@@ -42,13 +42,15 @@ class FixtureService(teach_ui.TeachingService):
         super().__init__(root, motion_factory=self.connect_simulation)
         self.mode = 'normal'
         self.moves = []
+        self.joint_moves = []
 
     def connect_simulation(self, host):
         assert host == 'simulated-robot', 'Test fixture refuses hardware addresses'
-        record = self.project.validation
+        returning = self.busy == 'return_observation'
+        captured = self.project.observation.robot if returning else self.project.validation['capture_robot']
         robot = ValidationRobot()
-        robot.pose = list(record['capture_robot']['tcp_pose_m_rad'])
-        robot.joints = list(record['capture_robot']['joints_rad'])
+        robot.pose = list(captured['tcp_pose_m_rad'])
+        robot.joints = [q + .03 if returning else q for q in captured['joints_rad']]
         robot._duration = 1 if self.mode == 'normal' else 10
         if self.mode == 'wrong_tcp':
             robot.tcp = [0]*6
@@ -59,6 +61,13 @@ class FixtureService(teach_ui.TeachingService):
             return original_move(*args)
 
         robot.moveL = move
+        original_joint_move = robot.moveJ
+
+        def move_joint(*args):
+            self.joint_moves.append(list(args[0]))
+            return original_joint_move(*args)
+
+        robot.moveJ = move_joint
         return robot, robot
 
 
@@ -66,7 +75,7 @@ class FixtureHandler(teach_ui.Handler):
     def do_GET(self):
         if urlsplit(self.path).path == '/__test__/metrics':
             project = self.server.service.project
-            return self.reply({'moves': self.server.service.moves,
+            return self.reply({'moves': self.server.service.moves, 'joint_moves': self.server.service.joint_moves,
                 'reference_sha256': digest(project.directory/'observation.json'),
                 'grasp_sha256': digest(project.directory/'grasp_pick.json'),
                 'target_sha256': digest(project.directory/'target.json')})

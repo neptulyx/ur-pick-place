@@ -199,6 +199,10 @@ class VisionPipelineTests(unittest.TestCase):
             self.assertLess(relative_error, 0.2)
 
     def test_shift_beyond_limit_refused_at_preview(self):
+        limited = json.loads(self.vision.read_text())
+        limited['pick']['limits'] = {'max_shift_mm': 30}
+        self.vision = self.root / 'limited_displacement_vision.json'
+        self.vision.write_text(json.dumps(limited))
         self.world.move_pick(40, 0, 0)
         code, out = self.preview_cycle()
         self.assertEqual(code, 1)

@@ -1,4 +1,4 @@
-"""Local marker teaching with explicitly requested validation approach motion."""
+"""Local marker teaching with explicitly requested fixed-height validation motion."""
 import argparse
 import errno
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,9 +16,9 @@ from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, build_opener
 import webbrowser
 
-from .teaching import TeachingProject, VERSION, defaults, read_json
-from .validation import ValidationMotion, check_capture, pose_error
-from ..config import construct, number
+from .teaching import TeachingProject, VERSION, defaults, digest, read_json
+from .validation import ObservationReturnMotion, ValidationMotion, check_capture, pose_error
+from ..config import construct, number, vector
 from ..manual import ManualSettings
 from ..poses import PoseStore
 
@@ -55,11 +55,12 @@ class TeachingService:
         self.motion_thread = None
         self.motion_stop = threading.Event()
         self.heartbeat_at = 0
+        self.return_result = None
 
     def state(self):
         with self.lock:
             return {'version': VERSION, 'busy': self.busy, 'error': self.error, 'completed': self.completed, 'failed': self.failed,
-                    'project': None if self.project is None else self.project.summary()}
+                    'project': None if self.project is None else self.project.summary(), 'return_result': self.return_result}
 
     def heartbeat(self):
         with self.lock:
@@ -80,14 +81,44 @@ class TeachingService:
             raise ValueError('Validation motion stopped. Capture again before another attempt.')
         if time.monotonic() - self.heartbeat_at > 2:
             raise ValueError('UI heartbeat lost; validation motion stopped')
-        check_capture(project, record)
+        if record.get('motion_kind') == 'return_observation':
+            project.check_inputs()
+            if digest(project.directory / 'observation.json') != record['observation_sha256']:
+                raise ValueError('Saved observation changed; return request cancelled')
+        else:
+            check_capture(project, record)
+
+    def return_observation(self, body):
+        with self.lock:
+            if self.closed or self.busy or self.project is None:
+                raise ValueError('Complete setup and wait for the current operation')
+            project = self.project
+            if not project.flow['captured'] or project.observation is None:
+                raise ValueError('Capture the teaching reference in step 2 first')
+            if body.get('path_confirmed') is not True:
+                raise ValueError('Confirm the joint-motion path back to observation is clear')
+            speed = number(body.get('joint_speed_deg_s'), 'Return joint speed', low=1, high=6)
+            settings = construct(ManualSettings, dict(robot_ip=project.settings['robot_ip'],
+                joint_speed_rad_s=math.radians(speed), joint_accel_rad_s2=.1,
+                workspace_min_m=body.get('workspace_min_m'), workspace_max_m=body.get('workspace_max_m')))
+            record = dict(motion_kind='return_observation',
+                target_joints_rad=vector(project.observation.robot['joints_rad'], 6, 'Saved observation joints'),
+                observation_sha256=digest(project.directory / 'observation.json'))
+            self.motion_stop.clear()
+            self._motion_guard(project, record)
+            project.validation = None  # Moving invalidates any existing motion capture.
+            self.return_result = None
+            self.busy, self.error, self.completed, self.failed = 'return_observation', '', None, None
+            self.motion_thread = threading.Thread(target=self._move_validation,
+                args=(project, record, settings), daemon=True)
+            self.motion_thread.start()
 
     def move_validation(self, body):
         with self.lock:
             if self.closed or self.busy or self.project is None:
                 raise ValueError('Complete setup and wait for the current operation')
             if body.get('path_confirmed') is not True:
-                raise ValueError('Confirm the marker stayed fixed and the approach path is clear')
+                raise ValueError('Confirm the marker stayed fixed and the validation path is clear')
             record = self.project.validation
             check_capture(self.project, record)
             if body.get('capture_id') != record['id']:
@@ -106,15 +137,20 @@ class TeachingService:
 
     def _move_validation(self, project, record, settings):
         motion = None
-        result = dict(record, status='failed', speed_mm_s=settings.tcp_speed_mm_s,
+        returning = record.get('motion_kind') == 'return_observation'
+        action = 'return_observation' if returning else 'validate_move'
+        result = dict(record, status='failed',
                       workspace_min_m=settings.workspace_min_m, workspace_max_m=settings.workspace_max_m)
+        result.update({'joint_speed_deg_s': math.degrees(settings.joint_speed_rad_s)} if returning
+                      else {'speed_mm_s': settings.tcp_speed_mm_s})
         error = None
         try:
             def guard():
                 self._motion_guard(project, record)
 
             guard()
-            motion = ValidationMotion(settings, PoseStore(project.directory / 'validation_waypoints.json'),
+            motion_class = ObservationReturnMotion if returning else ValidationMotion
+            motion = motion_class(settings, PoseStore(project.directory / 'validation_waypoints.json'),
                 project=project, record=record, guard=guard, factory=self.motion_factory)
             with self.lock:
                 self.motion = motion
@@ -132,16 +168,26 @@ class TeachingService:
 
             wait_idle()
             guard()
-            target = record['approach_tcp_pose_m_rad']
-            motion.submit('move_tcp', {'pose_mm_deg': [v*1000 for v in target[:3]]
-                           + [math.degrees(v) for v in target[3:]]})
+            if returning:
+                motion.submit('move_saved')
+            else:
+                target = record['validation_tcp_pose_m_rad']
+                motion.submit('move_tcp', {'pose_mm_deg': [v*1000 for v in target[:3]]
+                               + [math.degrees(v) for v in target[3:]]})
             state = wait_idle()
             if state['message'] != 'Movement complete' or state['feedback'] is None:
                 raise ValueError('Validation move did not complete')
-            actual = state['feedback']['tcp_pose_m_rad']
-            result.update(actual_tcp_pose_m_rad=actual, error=pose_error(actual, target))
-            if result['error']['position_mm'] > 1 or result['error']['rotation_deg'] > math.degrees(.005):
-                raise ValueError('Robot finished away from the commanded approach pose')
+            if returning:
+                actual = state['feedback']['joints_rad']
+                result.update(actual_joints_rad=actual, joint_error_deg=math.degrees(
+                    max(abs(a-b) for a, b in zip(actual, record['target_joints_rad']))))
+                if result['joint_error_deg'] > .1:
+                    raise ValueError('Robot finished away from the saved observation joints')
+            else:
+                actual = state['feedback']['tcp_pose_m_rad']
+                result.update(actual_tcp_pose_m_rad=actual, error=pose_error(actual, target))
+                if result['error']['position_mm'] > 1 or result['error']['rotation_deg'] > math.degrees(.005):
+                    raise ValueError('Robot finished away from the commanded validation pose')
             result['status'] = 'completed'
         except Exception as exc:
             error = str(exc)
@@ -159,12 +205,16 @@ class TeachingService:
                     result.update(status='failed', message=error)
             with self.lock:
                 try:
-                    project.record_validation(result)
+                    if returning:
+                        self.return_result = result
+                    else:
+                        project.record_validation(result)
                 except Exception as exc:
                     error = f'Cannot save validation result: {exc}'
-                    project.validation = dict(result, status='failed', message=error)
-                self.error, self.failed = error or '', 'validate_move' if error else None
-                self.completed = None if error else 'validate_move'
+                    if not returning:
+                        project.validation = dict(result, status='failed', message=error)
+                self.error, self.failed = error or '', action if error else None
+                self.completed = None if error else action
                 self.busy, self.motion = None, None
 
     def review_validation(self, body):
@@ -186,6 +236,7 @@ class TeachingService:
             if body.get('tcp_confirmed') is not True:
                 raise ValueError('Confirm the entered TCP offset matches the active gripper TCP on the pendant')
             self.project = TeachingProject(body)
+            self.return_result = None
             self.completed, self.error, self.failed = 'configure', '', None
             return self.state()
 
@@ -370,6 +421,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/validation/move':
                 self.server.service.move_validation(body)
                 return self.reply({'accepted': True}, 202)
+            if path == '/api/validation/return':
+                self.server.service.return_observation(body)
+                return self.reply({'accepted': True}, 202)
             if path == '/api/validation/review':
                 return self.reply(self.server.service.review_validation(body))
             if path == '/api/validation/capture':
@@ -429,7 +483,7 @@ def main(argv=None):
             webbrowser.open(url)
         return 0
     url = f'http://127.0.0.1:{server.server_address[1]}'
-    print(f'Marker Pick Teacher v{VERSION}: {url}\nTeach using the pendant; step 5 offers explicit validation approach motion.', flush=True)
+    print(f'Marker Pick Teacher v{VERSION}: {url}\nTeach using the pendant; step 5 offers explicit fixed-height validation motion.', flush=True)
     if not args.no_browser:
         timer = threading.Timer(.3, webbrowser.open, args=(url,))
         timer.daemon = True

@@ -156,14 +156,15 @@ class QualityGateTests(unittest.TestCase):
             parse_handeye(raw)
 
 
-def charuco_target(directory):
+def charuco_target(directory, *, config=None, board='front'):
     """A front board manifest built like charuco-realsense's tests (no PDF stack needed)."""
     from charuco_generator import __version__ as generator_version
     from charuco_generator.board import canonical_hash, create_board, layout_record
     from charuco_generator.config import load_config
     from ur_pick_place.vision.targets import target_from_config
     generator = Path(__file__).resolve().parents[2] / 'charuco-generator'
-    config = load_config(generator / 'config' / 'boards.json')
+    config = config or load_config(generator / 'config' / 'boards.json')
+    config.validate()
     manifest = {'schema_version': 1, 'generator_version': generator_version,
                 'combined_pdf': None, 'pdf_layouts': {}, 'sha256': {},
                 'environment': {'opencv': cv2.__version__},
@@ -171,7 +172,7 @@ def charuco_target(directory):
                 'boards': [layout_record(config.geometry, spec, create_board(config.geometry, spec))
                            for spec in config.boards]}
     (Path(directory) / 'board_manifest.json').write_text(json.dumps(manifest))
-    return target_from_config({'kind': 'charuco', 'board': 'front', 'board_manifest': 'board_manifest.json'},
+    return target_from_config({'kind': 'charuco', 'board': board, 'board_manifest': 'board_manifest.json'},
                               directory)
 
 

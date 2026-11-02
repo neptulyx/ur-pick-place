@@ -27,7 +27,7 @@ from .robot_state import ReceivePoseSource, require_stationary
 from .targets import same_target, target_from_config
 from .transforms import matrix_to_pose
 
-VERSION = '0.2.0'
+VERSION = '0.2.8'
 
 
 def digest(path):
@@ -36,6 +36,27 @@ def digest(path):
 
 def read_json(path):
     return json.loads(Path(path).read_text())
+
+
+def picking_boards(manifests):
+    """List validated printed boards with their full pattern dimensions."""
+    boards = []
+    for path in manifests:
+        try:
+            records = read_json(path)['boards']
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            try:
+                spec = dict(kind='charuco', board_manifest=path, board=record['name'])
+                target = target_from_config(spec)
+                boards.append(dict(target=spec, dimensions_mm=list(target.record['pattern_dimensions_mm']),
+                                   dictionary=target.dictionary, marker_ids=list(target.record['marker_ids'])))
+            except (OSError, ValueError, KeyError, TypeError, VisionError):
+                continue
+    return boards
 
 
 def defaults(repo):
@@ -57,13 +78,27 @@ def defaults(repo):
         except (ValueError, OSError, VisionError):
             continue
     manifests = [str(p) for p in sorted((repo.parent / 'charuco-generator' / 'output').rglob('board_manifest.json'))]
-    stage2 = next((p for p in manifests if '/calibration_stage2/' in p), manifests[0] if manifests else '')
-    return {'calibrations': calibrations, 'manifests': manifests,
+    boards = picking_boards(manifests)
+    picking = [b for b in boards if 'calibration' not in b['target']['board'].lower()]
+    preferred = [b for b in picking if np.allclose(b['dimensions_mm'], [80, 80])] or picking
+    target = preferred[0]['target'] if preferred else dict(kind='charuco', board_manifest='', board='')
+    # Reuse a known picking target without silently opening or overwriting its teaching.
+    projects = sorted((repo / 'data' / 'marker-teaching').glob('*/project.json'),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in projects:
+        try:
+            saved = read_json(path)
+            if saved['flow']['captured'] and saved['settings']['target'] in [b['target'] for b in preferred]:
+                target = saved['settings']['target']
+                break
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return {'calibrations': calibrations, 'manifests': manifests, 'picking_boards': boards,
             'settings': {'project': str(repo / 'data' / 'marker-teaching' / datetime.now().strftime('%Y%m%d-%H%M%S')),
                          'calibration': calibrations[0]['path'] if calibrations else '',
                          'robot_ip': calibrations[0]['robot_ip'] if calibrations else '',
                          'tcp': calibrations[0]['tcp'] if calibrations else [0.0] * 6,
-                         'target': {'kind': 'charuco', 'board_manifest': stage2, 'board': 'calibration_stage2'},
+                         'target': target,
                          'motion_model': 'planar', 'approach_mm': 100.0, 'limits': asdict(Limits())}}
 
 
@@ -273,6 +308,11 @@ class TeachingProject:
         record = dict(self._target(observation), id=uuid.uuid4().hex, status='captured',
                       marker_tcp_pose_m_rad=matrix_to_pose(observation.base_target),
                       capture_robot=observation.robot, grasp_sha256=digest(self.directory / 'grasp_pick.json'))
+        # Validation follows the calculated pick in XY/orientation at the captured
+        # TCP height. Keep the exported pick/approach poses independent of this test.
+        target = list(record['pick_tcp_pose_m_rad'])
+        target[2] = observation.robot['tcp_pose_m_rad'][2]
+        record.update(validation_mode='fixed_z', validation_tcp_pose_m_rad=target)
         atomic_json(self.directory / 'validation_capture.json', record)
         self.validation = record
         return record

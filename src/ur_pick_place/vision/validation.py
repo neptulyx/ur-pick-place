@@ -1,4 +1,4 @@
-"""Single-use approach tests using Robot Bench's monitored motion worker."""
+"""Single-use fixed-height tracking tests using Robot Bench's monitored motion worker."""
 import math
 import time
 
@@ -14,6 +14,8 @@ def check_capture(project, record):
     project.check_inputs()
     if record is None or record['status'] != 'captured':
         raise ValueError('Capture a fresh validation marker before each motion attempt')
+    if record.get('validation_mode') != 'fixed_z' or 'validation_tcp_pose_m_rad' not in record:
+        raise ValueError('Capture again to create a fixed-height validation target')
     if not 0 <= time.time() - record['timestamp'] <= MAX_CAPTURE_AGE_S:
         raise ValueError('Validation capture expired (60 seconds). Capture again.')
     if digest(project.directory / 'grasp_pick.json') != record['grasp_sha256']:
@@ -49,12 +51,14 @@ class ValidationMotion(ManualService):
         if (max(abs(a-b) for a, b in zip(after['joints_rad'], captured['joints_rad'])) > .0035
                 or error['position_mm'] > 3 or error['rotation_deg'] > 1):
             raise ValueError('Robot moved since validation capture. Return to observation and capture again.')
-        target = self._workspace(self.record['approach_tcp_pose_m_rad'])
+        target = self._workspace(self.record['validation_tcp_pose_m_rad'])
+        if target[2] != captured['tcp_pose_m_rad'][2]:
+            raise ValueError('Validation target must keep the captured TCP height. Capture again.')
         self._workspace(after['tcp_pose_m_rad'])
         if after['safety_mode'] not in (1, 2):
             raise ValueError('Robot must be in normal or reduced safety mode to move')
         if self.control.getInverseKinematicsHasSolution(target, after['joints_rad']) is not True:
-            raise ValueError('Validation approach has no inverse kinematics solution')
+            raise ValueError('Validation target has no inverse kinematics solution')
         if self.control.isPoseWithinSafetyLimits(target) is not True:
             raise ValueError('TCP target is unreachable or outside robot safety limits')
         progress = self.control.getAsyncOperationProgress()
@@ -76,12 +80,51 @@ class ValidationMotion(ManualService):
             raise RuntimeError('Robot rejected the movement')
 
     def _stop_motion(self):
-        # Validation only submits linear moves. Treat a rejected stop as a failure.
         with self._lock:
             motion = self._motion
         if motion and self.control:
-            if self.control.stopL(1.0) is not True:
+            stop = self.control.stopJ if motion['mode'] == 'joint' else self.control.stopL
+            if stop(1.0) is not True:
                 raise RuntimeError('Robot rejected the validation stop')
             with self._lock:
                 self._motion = None
                 self._message = 'Movement stopped'
+
+
+class ObservationReturnMotion(ValidationMotion):
+    """Return to the saved joint configuration, independent of marker visibility."""
+
+    def _execute(self, command, payload, generation):
+        if command != 'move_saved':
+            return super()._execute(command, payload, generation)
+        before = self._read()
+        time.sleep(.25)
+        after = self._read()
+        if max(abs(a-b) for a, b in zip(before['joints_rad'], after['joints_rad'])) > 2e-4:
+            raise ValueError('Robot must be stationary before returning to observation')
+        target = list(self.record['target_joints_rad'])
+        self._workspace(after['tcp_pose_m_rad'])
+        if after['safety_mode'] not in (1, 2):
+            raise ValueError('Robot must be in normal or reduced safety mode to move')
+        if self.control.isJointsWithinSafetyLimits(target) is not True:
+            raise ValueError('Observation joints are outside robot safety limits')
+        # Pass the TCP explicitly: on the installed controller/SDK, the omitted
+        # argument produces an incorrect pose for supplied joints.
+        target_tcp = self._workspace(self.control.getForwardKinematics(target, self.project.settings['tcp']))
+        if self.control.isPoseWithinSafetyLimits(target_tcp) is not True:
+            raise ValueError('Observation pose is outside robot safety limits')
+        progress = self.control.getAsyncOperationProgress()
+        latest = self._read()
+        if latest['safety_mode'] not in (1, 2):
+            raise ValueError('Robot safety mode changed during return preflight')
+        if max(abs(a-b) for a, b in zip(after['joints_rad'], latest['joints_rad'])) > 2e-4:
+            raise ValueError('Robot moved during return preflight')
+        self.guard()
+        with self._lock:
+            if generation != self._generation or self._stop_requested.is_set() or self._shutdown.is_set():
+                raise ValueError('Return stopped before dispatch')
+            self._motion = dict(mode='joint', before=progress, started=False, deadline=time.monotonic()+120)
+            self._message = 'Returning to observation joints'
+        if self.control.moveJ(target, self.settings.joint_speed_rad_s,
+                              self.settings.joint_accel_rad_s2, True) is not True:
+            raise RuntimeError('Robot rejected the return movement')
