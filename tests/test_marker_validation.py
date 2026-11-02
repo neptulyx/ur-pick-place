@@ -372,6 +372,17 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.service.review_validation(dict(capture_id=self.record['id'], result='aligned'))
 
+    def test_independent_xyz_error_is_recorded_separately_from_motion_completion(self):
+        self.project.validation = dict(self.record, status='completed')
+        self.service.review_validation(dict(capture_id=self.record['id'], result='aligned',
+                                            measured_error_mm=[.5, -.3, .8]))
+        measured = self.project.validation
+        self.assertAlmostEqual(measured['measured_position_error_mm'], math.sqrt(.98))
+        self.assertTrue(measured['within_2mm'])
+        self.service.review_validation(dict(capture_id=self.record['id'], result='misaligned',
+                                            measured_error_mm=[0, 0, 2.1]))
+        self.assertFalse(self.project.validation['within_2mm'])
+
     def test_tcp_change_or_rejected_stop_during_motion_is_reported(self):
         for problem in ('tcp', 'stop'):
             with self.subTest(problem=problem):

@@ -33,6 +33,7 @@ def _nested(owner, key, cls, optional=False):
 
 @dataclass
 class Camera:
+    provider: str = 'realsense'
     serial: str | None = None
     width: int = 1280
     height: int = 720
@@ -41,8 +42,17 @@ class Camera:
     lock_exposure: bool = False
     intrinsics: str = 'calibration'
     max_intrinsics_mismatch_px: float = 5.0
+    exposure_time_us: float | None = None
 
     def __post_init__(self):
+        if self.provider not in ('realsense', 'basler'):
+            raise ValueError('camera.provider must be realsense or basler')
+        if self.provider == 'basler' and self.intrinsics != 'calibration':
+            raise ValueError('Basler cameras require intrinsics from calibration')
+        if self.exposure_time_us is not None:
+            number(self.exposure_time_us, 'camera.exposure_time_us', positive=True, high=1000000)
+            if self.provider != 'basler':
+                raise ValueError('camera.exposure_time_us is currently supported for Basler only')
         if self.serial is not None and (not isinstance(self.serial, str) or not self.serial.strip()):
             raise ValueError('camera.serial must be a nonempty string or null')
         _integer(self.width, 'camera.width', 64, 8192)
@@ -89,12 +99,16 @@ class Refine:
     distance_m: float = 0.3
     max_move_mm: float = 300.0
     max_rotation_deg: float = 45.0
+    max_view_error_mm: float = 5.0
+    max_view_error_deg: float = 2.0
 
     def __post_init__(self):
         _flag(self.enabled, 'refine.enabled')
         number(self.distance_m, 'refine.distance_m', low=0.05, high=2.0)
         number(self.max_move_mm, 'refine.max_move_mm', positive=True, high=1000)
         number(self.max_rotation_deg, 'refine.max_rotation_deg', positive=True, high=90)
+        number(self.max_view_error_mm, 'refine.max_view_error_mm', positive=True, high=50)
+        number(self.max_view_error_deg, 'refine.max_view_error_deg', positive=True, high=15)
 
 
 @dataclass

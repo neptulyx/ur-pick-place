@@ -165,6 +165,36 @@ teaching reference requires teaching the pick again.
 
 ## 6. Use the camera pick in Robot Bench
 
+For a fresh measurement on each run:
+
+1. In Marker Pick Teacher, select the camera and enable **Refine before picking**
+   when creating a new project. Capture a clear teaching view at about 300 mm,
+   then teach and save the pick as usual.
+2. In Robot Bench, open **Joint & force tests → Camera target**. Enter the saved
+   project's full `vision.json` path in **Live vision configuration**. Select
+   Home/Place and configure the gripper, approach height and force limits.
+3. Connect, keep the whole pick marker visible and stationary, then click
+   **Preview cycle**. This captures without moving the robot.
+4. Review the preview and clear the refinement and picking paths. **Run one cycle**
+   captures again, makes one bounded move to the taught camera-to-marker view,
+   settles, captures again and checks that view before picking. The initial arm
+   joints may differ from teaching. A failed refinement blocks the pick.
+
+The external system must stop the AGV before arm motion and keep it stopped
+throughout capture and picking. No AGV controller or interlock is added here.
+Existing workspace, reachability, target-shift and preview-change limits remain
+active. A moved AGV needs a fresh preview. Place poses saved in the robot base
+frame must still be valid at the parked location.
+
+Refinement defaults to a 5 mm / 2° view-match tolerance, configurable through
+`pick.refine.max_view_error_mm` and `max_view_error_deg` in `vision.json`. These
+check reproduction of the camera view; they do not certify ±2 mm picking accuracy.
+Detection thresholds and accepted-frame averaging are unchanged. When refinement
+is disabled, localization uses the calibrated transform directly without a
+same-joint-angle restriction.
+
+For manual snapshot transfer:
+
 1. In Marker Pick Teacher, re-read the marker and download a fresh `target.json`.
 2. In Robot Bench, open **Joint & force tests → Camera target** and load that file.
    It overrides the saved Pick selection.
@@ -175,6 +205,34 @@ teaching reference requires teaching the pick again.
 Exported targets are static snapshots: re-read and reload for each new pick.
 Camera target JSON uses `[x, y, z, rx, ry, rz]` in the robot base frame,
 **metres and rotation-vector radians**.
+
+### Basler a2A2448-23gmBAS
+
+Install the additional adapter with `.venv/bin/python -m pip install -e '.[basler]'`.
+Choose **Basler** in Marker Pick Teacher and select its own hand-eye calibration.
+The calibration must describe this camera's serial, lens intrinsics/distortion,
+2448 × 2048 image profile, mounting and active TCP. RealSense calibration and its
+taught grasp cannot be reused after the camera swap.
+
+[examples/vision-basler.json](examples/vision-basler.json) illustrates the profile
+and optional manual exposure (`exposure_time_us`). Set exposure for the actual
+lighting; focus and lock the 16 mm lens before calibrating. The adapter uses Mono8,
+software-triggered images and the calibrated lens model; it resets crop offsets,
+binning and decimation to preserve the image geometry. Camera SDK imports are lazy,
+so RealSense operation does not require pypylon.
+
+### Check the ±2 mm application requirement
+
+Test across the expected parking variations and record independently measured
+TCP error at the actual pick point, including Z. Step 5 accepts optional measured
+XYZ errors and stores their magnitude and whether they are within 2 mm. Its
+fixed-Z visual test and controller arrival error alone do not prove pick accuracy.
+
+The vision report includes frame spread, marker-to-pick distance and the rotational
+contribution to pick-point spread. At a 300 mm offset, 0.2° angular error can cause
+about 1.05 mm displacement. Frame spread measures repeatability, not systematic
+calibration error. Robot Bench saves the last completed live plan alongside its
+sequence settings as `latest_vision_pick.json`.
 
 ## Saved files and useful commands
 

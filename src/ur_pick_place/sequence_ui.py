@@ -29,8 +29,15 @@ def initial_recipe(settings):
 def resolve_recipe(base, settings, store, payload, demo):
     if not isinstance(payload, dict):
         raise ValueError('Expected sequence settings')
-    if set(payload) - {'home_id', 'pick_id', 'place_id', 'camera_pose', 'options'}:
+    if set(payload) - {'home_id', 'pick_id', 'place_id', 'camera_pose', 'vision_file', 'options'}:
         raise ValueError('Unknown sequence setting')
+    vision_file = payload.get('vision_file')
+    if vision_file is not None and (not isinstance(vision_file, str) or not vision_file.strip()):
+        raise ValueError('Vision configuration needs a file path')
+    if vision_file and demo:
+        raise ValueError('Live vision requires a live robot connection')
+    if vision_file and payload.get('camera_pose') is not None:
+        raise ValueError('Choose a live vision configuration or a static camera pose')
     raw = asdict(base)
     options = payload.get('options', {})
     allowed = {'pick_approach_mm', 'place_approach_mm', 'pick_backoff_mm',
@@ -49,6 +56,9 @@ def resolve_recipe(base, settings, store, payload, demo):
     for role, field, coordinates in (('home', 'home_joints', 'joints_rad'),
                                       ('pick', 'pick_pose', 'tcp_pose_m_rad'),
                                       ('place', 'place_pose', 'tcp_pose_m_rad')):
+        if role == 'pick' and vision_file:
+            names[role] = 'Live marker target'
+            continue  # Replaced by the fresh camera observation before preview or run.
         if role == 'pick' and payload.get('camera_pose') is not None:
             raw[field] = vector(payload['camera_pose'], 6, 'Camera TCP pose (base m/rad)')
             names[role] = 'Camera TCP target'
@@ -64,6 +74,28 @@ def resolve_recipe(base, settings, store, payload, demo):
     recipe = construct(Recipe, raw)
     recipe.gripper.require_live_ready()
     return recipe, names
+
+
+def load_vision_job(recipe, path):
+    """Load the same calibrated vision path used by the CLI, without new RTDE sessions."""
+    from pathlib import Path
+    from .vision.config import VisionConfig
+    from .vision.handeye import load_handeye, check_metrics
+    from .vision.planner import VisionJob, file_sha256
+
+    path = Path(path).expanduser().resolve()
+    fingerprint = file_sha256(path)
+    config = VisionConfig.load(path)
+    if fingerprint != file_sha256(path):
+        raise ValueError('Vision configuration changed while loading; preview again')
+    calibration = load_handeye(config.path(config.handeye_calibration))
+    calibration.require_hardware()
+    check_metrics(calibration, config.max_handeye_loo_mm, config.max_handeye_reprojection_px,
+                  config.max_handeye_translation_sigma_mm)
+    if config.camera.serial and calibration.camera_serial and config.camera.serial != calibration.camera_serial:
+        raise ValueError('Configured camera serial differs from calibration')
+    config.camera.serial = calibration.camera_serial or config.camera.serial
+    return VisionJob(recipe, config, calibration, inputs={'vision_config': fingerprint})
 
 
 class SessionRobot(RTDERobot):

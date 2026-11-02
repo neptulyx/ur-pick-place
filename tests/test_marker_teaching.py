@@ -170,13 +170,12 @@ class MarkerTeachingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Calibration changed'):
             self.project.capture()
 
-    def test_different_observation_joints_refused(self):
+    def test_different_observation_joints_allow_localization(self):
         self.capture_and_teach()
-        # Same image/pose feedback but different joint history: strict viewpoint gate.
+        # Same camera-to-marker view is valid despite a different arm configuration.
         self.world.rtde.q[0] += .02
         with patch('ur_pick_place.vision.robot_state.nominal_flange', return_value=self.world.rtde.flange):
-            with self.assertRaisesRegex(VisionError, 'different joints'):
-                self.project.locate()
+            self.assertIn('pick_tcp_pose_m_rad', self.project.locate())
 
     def test_simulation_and_wrong_tcp_refused_before_hardware(self):
         raw = calibration_dict()

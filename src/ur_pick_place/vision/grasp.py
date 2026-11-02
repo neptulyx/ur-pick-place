@@ -2,9 +2,8 @@
 
 Teaching stores ``T_marker_tcp = inv(T_base_marker_taught) @ T_base_tcp_taught``. At
 run time the target TCP pose is ``T_base_marker_now @ Trans(offset) @ T_marker_tcp``.
-Hand-eye error largely cancels when the marker is viewed the same way as during
-teaching (same observe joints, or the marker-relative refine view), so teach with
-the same observation procedure that the job uses.
+Hand-eye error can largely cancel when the camera-to-marker view matches teaching.
+The optional refinement reproduces that view even after the robot base moves.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,6 +18,7 @@ from ..config import vector
 from ..poses import atomic_json
 from .errors import TargetValidationError, VisionError
 from .robot_state import same_tcp
+from .observe import view_error
 from .targets import same_target
 from .transforms import (check_transform, describe, invert, matrix_to_pose, pose_to_matrix, rotation_angle,
                          rotation_z, translation, yaw_tilt_split)
@@ -27,8 +27,6 @@ GRASP_SCHEMA = 1
 #: A taught TCP more than this far from its marker is almost certainly a teaching mistake.
 MAX_MARKER_TCP_DISTANCE_M = 0.5
 BASE_DOWN = np.array([0.0, 0.0, -1.0])
-#: Unrefined observations must come from the taught observe joints (about 0.6 deg per joint).
-VIEWPOINT_TOLERANCE_RAD = 0.01
 
 
 @dataclass(frozen=True)
@@ -157,26 +155,22 @@ def grasp_for(config, role_name):
 def target_pose(model, observation, role, *, calibration_sha256, tcp_offset, target, strict=True):
     """Compute and validate the TCP target. Returns ``(T_base_tcp, report)``.
 
-    ``strict`` also requires the observation procedure (refined or not) to match
-    teaching; read-only previews relax it and report a warning instead.
+    ``strict`` requires enabled refinement to reproduce the taught camera view;
+    read-only previews relax this check and report it instead.
     """
     reasons = []
     if not same_target(observation.target, target):
         reasons.append('observation target differs from the configured target; observe again')
-    procedure_matches = model.taught_refined is None or model.taught_refined == observation.refined
+    # A mobile base makes arm joints an invalid proxy for camera/marker viewpoint.
+    # Initial detection can use any pose; a refined run must reproduce the taught view.
+    procedure_matches = not role.refine.enabled or observation.refined
+    viewpoint = None
+    if role.refine.enabled and model.taught_view is not None:
+        mm, deg = view_error(observation.camera_target, model.taught_view)
+        viewpoint = {'position_mm': mm, 'rotation_deg': deg}
+        procedure_matches = procedure_matches and mm <= role.refine.max_view_error_mm and deg <= role.refine.max_view_error_deg
     if strict and not procedure_matches:
-        reasons.append(f'grasp was taught {"with" if model.taught_refined else "without"} the refine view but this '
-                       f'observation was {"refined" if observation.refined else "not refined"}; teach and run with '
-                       'the same observe procedure')
-    # Without the refine view, hand-eye error cancels only from the taught viewpoint.
-    observed_joints = observation.robot.get('joints_rad') if isinstance(observation.robot, dict) else None
-    viewpoint_moved = (not observation.refined and model.taught_joints is not None and observed_joints is not None
-                       and max(abs(a - b) for a, b in zip(model.taught_joints, observed_joints))
-                       > VIEWPOINT_TOLERANCE_RAD)
-    procedure_matches = procedure_matches and not viewpoint_moved
-    if strict and viewpoint_moved:
-        reasons.append('observed from different joints than teaching; observe from the taught observe joints '
-                       'or re-teach')
+        reasons.append('final camera-to-marker view differs from the taught view; refine before picking')
     if model.role not in (None, observation.role):
         reasons.append(f'grasp was taught for the {model.role} target, observation is {observation.role}')
     if model.target is not None and not same_target(model.target, target):
@@ -225,7 +219,15 @@ def target_pose(model, observation, role, *, calibration_sha256, tcp_offset, tar
               'shift_from_taught_mm': shift_mm, 'rotation_from_taught_deg': turn_deg,
               'marker_yaw_change_deg': math.degrees(yaw), 'marker_tilt_change_deg': math.degrees(tilt),
               'marker_height_change_mm': height_mm, 'tool_tilt_deg': tool_tilt,
-              'observation_refined': observation.refined, 'same_procedure_as_teaching': procedure_matches}
+              'observation_refined': observation.refined, 'same_procedure_as_teaching': procedure_matches,
+              'view_error': viewpoint}
+    # Temporal spread is a repeatability diagnostic, never an absolute accuracy claim.
+    lever_mm = float(np.linalg.norm((translation(offset_m) @ model.marker_tcp)[:3, 3])) * 1000
+    angular_spread = float(observation.quality.get('rotation_spread_deg', 0))
+    report['pick_repeatability'] = {'marker_to_pick_mm': lever_mm,
+        'rotation_contribution_mm': 2 * lever_mm * math.sin(math.radians(angular_spread) / 2),
+        'position_spread_mm': observation.quality.get('position_spread_mm'),
+        'meaning': 'frame-to-frame spread only; validate absolute TCP error independently'}
     if reasons:
         raise TargetValidationError(f'{observation.role} target refused', reasons)
     return pose, report

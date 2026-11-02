@@ -63,6 +63,8 @@ function showCalibrationTCP() {
 function fill(s) {
   for (const id of ['project','calibration','robot_ip','motion_model','approach_mm']) $(id).value=s[id];
   $('max_shift_mm').value=s.limits?.max_shift_mm??100; $('max_rotation_deg').value=s.limits?.max_rotation_deg??180;
+  $('camera_provider').value=s.camera_provider||'realsense';
+  $('refine_before_pick').checked=s.refine_before_pick??false;
   $('tcp').value=tcpText(s.tcp); $('kind').value=s.target.kind;
   if(s.target.kind==='charuco') { $('manifest').value=s.target.board_manifest; $('board').value=s.target.board; }
   else { for(const id of ['dictionary','marker_id','marker_length_mm']) $(id).value=s.target[id]; }
@@ -74,6 +76,7 @@ function settings() {
   if(tcp.length!==6||!tcp.every(Number.isFinite))
     throw new Error('Active gripper TCP needs six numbers: X, Y, Z in mm, then RX, RY, RZ in rotation-vector radians.');
   return {project:$('project').value,calibration:$('calibration').value,robot_ip:$('robot_ip').value,
+    camera_provider:$('camera_provider').value,refine_before_pick:$('refine_before_pick').checked,
     motion_model:$('motion_model').value,approach_mm:Number($('approach_mm').value),
     tcp,tcp_confirmed:$('tcp_confirmed').checked,
     limits:{max_shift_mm:Number($('max_shift_mm').value),max_rotation_deg:Number($('max_rotation_deg').value),max_tilt_change_deg:10,max_height_change_mm:10,max_tool_tilt_deg:20},
@@ -127,7 +130,7 @@ function renderValidation(p,busy) {
     $('validation-motion-result').textContent=v.status+(v.message?' · '+v.message:'')+(v.error?`\nTCP error: ${v.error.position_mm.toFixed(2)} mm / ${v.error.rotation_deg.toFixed(3)}°`:'')+(v.visual_result?'\nVisual alignment: '+v.visual_result:'');
     $('validation-actual-pose').textContent=v.actual_tcp_pose_m_rad?'Measured TCP:\n'+validationPose(v.actual_tcp_pose_m_rad):'';
     if(validationImageId!==v.id) {
-      validationImageId=v.id; $('validation-confirmed').checked=false;
+      validationImageId=v.id; $('validation-confirmed').checked=false; $('validation-measured-error').value='';
       $('validation-move').disabled=true;
       $('validation-image').src='/api/validation/image?v='+encodeURIComponent(v.id);
       $('validation-image').hidden=false;
@@ -136,7 +139,7 @@ function renderValidation(p,busy) {
     $('validation-image').hidden=true; $('validation-confirmed').checked=false; validationImageId='';
   }
   $('validation-placeholder').hidden=!$('validation-image').hidden;
-  $('validation-history').textContent=(!dirty&&p?.validation_history?.length)?p.validation_history.slice().reverse().map((t,i)=>`${p.validation_history.length-i}. ${new Date(t.timestamp*1000).toLocaleString()} · ${t.status}${t.error?` · ${t.error.position_mm.toFixed(2)} mm / ${t.error.rotation_deg.toFixed(3)}°`:''} · visual: ${t.visual_result||'unreviewed'}${t.message?'\n'+t.message:''}`).join('\n'):'No motion tests yet.';
+  $('validation-history').textContent=(!dirty&&p?.validation_history?.length)?p.validation_history.slice().reverse().map((t,i)=>`${p.validation_history.length-i}. ${new Date(t.timestamp*1000).toLocaleString()} · ${t.status}${t.error?` · ${t.error.position_mm.toFixed(2)} mm / ${t.error.rotation_deg.toFixed(3)}°`:''} · visual: ${t.visual_result||'unreviewed'}${t.measured_position_error_mm!==undefined?` · independently measured: ${t.measured_position_error_mm.toFixed(2)} mm (${t.within_2mm?'within':'outside'} 2 mm)`:''}${t.message?'\n'+t.message:''}`).join('\n'):'No motion tests yet.';
 }
 function render() {
   if(!state) return;
@@ -168,7 +171,7 @@ function render() {
     $('observe-joints').textContent=o?'Saved observation joints (degrees): '+p.observe_joints.map(q=>(q*180/Math.PI).toFixed(2)).join(', '):'Saved observation joints appear after capture.';
     $('teach-result').textContent=f.taught?'Saved gripper TCP endpoint (base m/rad):\n'+poseText(p.taught.taught_tcp_in_base)+'\nMarker-relative relationship saved in grasp_pick.json.':'';
     $('storage').textContent='Project files: '+p.project;
-    if(p.exported) { $('pick-pose').textContent=poseText(p.exported.pick_tcp_pose_m_rad); $('approach-pose').textContent=poseText(p.exported.approach_tcp_pose_m_rad); }
+    if(p.exported) { $('pick-pose').textContent=poseText(p.exported.pick_tcp_pose_m_rad)+(p.exported.refinement_required?'\nPreview only · use live vision to refine before picking':''); $('approach-pose').textContent=poseText(p.exported.approach_tcp_pose_m_rad); }
   }
 }
 async function post(action,body) {
@@ -278,7 +281,9 @@ async function stopValidation() {
 }
 $('validation-stop').addEventListener('click',stopValidation);
 for(const [id,result] of [['validation-aligned','aligned'],['validation-misaligned','misaligned']]) $(id).addEventListener('click',async()=>{
-  try { await request('/api/validation/review',{capture_id:state.project.validation.id,result}); await poll(); message(result==='aligned'?'Alignment recorded. Reposition and capture again to test another pose.':'Alignment needs adjustment recorded. Review teaching and calibration before another test.'); }
+  try { const text=$('validation-measured-error').value.trim();
+    const measured_error_mm=text?text.split(/[\s,]+/).map(Number):null;
+    await request('/api/validation/review',{capture_id:state.project.validation.id,result,measured_error_mm}); await poll(); message(result==='aligned'?'Alignment recorded. Reposition and capture again to test another pose.':'Alignment needs adjustment recorded. Review teaching and calibration before another test.'); }
   catch(e) { message(e.message,true); }
 });
 $('validation-image').addEventListener('error',()=>{$('validation-image').hidden=true;$('validation-placeholder').hidden=false;});

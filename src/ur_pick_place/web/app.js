@@ -305,6 +305,7 @@ function sequencePayload() {
   }
   return {home_id: $('sequence-home').value, pick_id: $('sequence-pick').value, place_id: $('sequence-place').value,
     camera_pose: cameraText ? JSON.parse(cameraText) : null,
+    vision_file: $('seq-vision-file').value.trim() || null,
     options: {gripper, pick_approach_mm: sequenceNumber('seq-pick-approach'), place_approach_mm: sequenceNumber('seq-place-approach'),
       pick_backoff_mm: sequenceNumber('seq-backoff'), lift_mm: sequenceNumber('seq-lift'), retract_mm: sequenceNumber('seq-retract'),
       grasp_offset_mm: ['x', 'y', 'z'].map(axis => sequenceNumber(`seq-offset-${axis}`)),
@@ -331,6 +332,7 @@ function initializeSequence(data) {
       $(`seq-${role}-${field}`).value = probe[key];
     }
   }
+  $('seq-vision-file').value = saved.vision_file || '';
   if (saved.camera_pose) $('seq-camera-pose').value = JSON.stringify(saved.camera_pose);
   sequenceInitialized = true;
 }
@@ -374,7 +376,7 @@ function updateSequenceControls(connected, busy, safe) {
   $('arduino-fields').classList.toggle('hidden', kind !== 'arduino');
   $('sequence-form').querySelectorAll('input, select, textarea').forEach(input => { input.disabled = !!busy; });
   $(kind === 'rg2' ? 'arduino-fields' : 'rg2-fields').querySelectorAll('input, select').forEach(input => { input.disabled = true; });
-  if ($('seq-camera-pose').value.trim()) $('sequence-pick').disabled = true;
+  if ($('seq-camera-pose').value.trim() || $('seq-vision-file').value.trim()) $('sequence-pick').disabled = true;
   $('sequence-preview').disabled = !!busy;
   $('demo-poses').disabled = !!busy;
   $('sequence-run').disabled = !safe || !!busy || !sequencePreviewId || state?.sequence.preview?.id !== sequencePreviewId;
@@ -389,7 +391,7 @@ $('sequence-form').onsubmit = async event => {
   try {
     const preview = await post('/api/sequence/preview', payload);
     sequencePreviewId = preview.id; previewPayloadKey = JSON.stringify(payload);
-    $('sequence-summary').textContent = `${preview.demo ? 'DEMO' : preview.robot_ip} · ${preview.gripper === 'rg2' ? 'OnRobot RG2' : 'Arduino gripper'} · one cycle\n${preview.names.home} → ${preview.names.pick} → ${preview.names.home} → ${preview.names.place}\nGrasp offset: [${preview.grasp_offset_mm.join(', ')}] mm · pick/place contact: ${preview.pick_force_n}/${preview.place_force_n} N · transit: ${preview.tcp_speed_mm_s} mm/s\nPreview checks the workspace envelope; whole robot paths must have clearance.`;
+    $('sequence-summary').textContent = `${preview.demo ? 'DEMO' : preview.robot_ip} · ${preview.gripper === 'rg2' ? 'OnRobot RG2' : 'Arduino gripper'} · one cycle\n${preview.names.home} → ${preview.names.pick} → ${preview.names.home} → ${preview.names.place}\nGrasp offset: [${preview.grasp_offset_mm.join(', ')}] mm · pick/place contact: ${preview.pick_force_n}/${preview.place_force_n} N · transit: ${preview.tcp_speed_mm_s} mm/s\n${preview.vision ? 'Live marker captured · Run measures again and applies the configured refinement.\n' : ''}Preview checks the workspace envelope; whole robot paths must have clearance.`;
     $('sequence-summary').classList.remove('hidden');
     await poll();
   } catch (error) { sequencePreviewId = null; showError(error.message); }
