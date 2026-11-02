@@ -135,6 +135,9 @@ class VisionPipelineTests(unittest.TestCase):
                    f'place={self.root / "obs_place.json"}', '--preview-out', self.preview, *extra)
 
     def execute(self):
+        if self.refine:
+            # The application starts with the pick marker in view. Place is observed separately.
+            self.world.rtde.moveJ(OBSERVE_PICK, .1, .1)
         return run(self.runtime, 'vision-pick', *self.common(), '--execute', '--preview', self.preview)
 
     def assert_no_pick_motion(self):

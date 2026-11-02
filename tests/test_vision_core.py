@@ -264,26 +264,27 @@ class GraspTests(unittest.TestCase):
             target_pose(self.model, observed, self.role(), calibration_sha256='abc',
                         tcp_offset=TCP_OFFSET, target=self.target)
 
-    def test_observation_procedure_must_match_teaching(self):
-        import dataclasses
-        model = dataclasses.replace(self.model, taught_refined=True)
+    def test_refinement_requires_verified_camera_view(self):
         moved = face_up(-0.395, -0.335, yaw_deg=22)
         options = dict(calibration_sha256='abc', tcp_offset=TCP_OFFSET, target=self.target)
-        with self.assertRaisesRegex(TargetValidationError, 'same observe procedure'):
-            target_pose(model, observation(moved), self.role(), **options)
-        _, report = target_pose(model, observation(moved), self.role(), strict=False, **options)
+        role = self.role(refine={'enabled': True})
+        observed = observation(moved)
+        with self.assertRaisesRegex(TargetValidationError, 'refine before picking'):
+            target_pose(self.model, observed, role, **options)
+        _, report = target_pose(self.model, observed, role, strict=False, **options)
         self.assertFalse(report['same_procedure_as_teaching'])
+        observed.refined = True
+        target_pose(self.model, observed, role, **options)
+        observed.camera_target[0, 3] += .02
+        with self.assertRaisesRegex(TargetValidationError, 'camera-to-marker view'):
+            target_pose(self.model, observed, role, **options)
 
-    def test_unrefined_observation_must_use_taught_viewpoint(self):
+    def test_different_arm_joints_do_not_reject_a_matching_camera_view(self):
         moved = face_up(-0.395, -0.335, yaw_deg=22)
         options = dict(calibration_sha256='abc', tcp_offset=TCP_OFFSET, target=self.target)
         elsewhere = observation(moved)
         elsewhere.robot = dict(elsewhere.robot, joints_rad=[q + 0.05 for q in OBSERVE_PICK])
-        with self.assertRaisesRegex(TargetValidationError, 'different joints than teaching'):
-            target_pose(self.model, elsewhere, self.role(), **options)
-        _, report = target_pose(self.model, elsewhere, self.role(), strict=False, **options)
-        self.assertFalse(report['same_procedure_as_teaching'])
-        _, report = target_pose(self.model, observation(moved), self.role(), **options)
+        _, report = target_pose(self.model, elsewhere, self.role(), **options)
         self.assertTrue(report['same_procedure_as_teaching'])
 
     def test_teach_refuses_implausible_relationships(self):

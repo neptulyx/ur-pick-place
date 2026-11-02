@@ -12,7 +12,7 @@ from .config import construct, number, vector
 from .geometry import rotate_base
 from .poses import atomic_json, pose_name
 from .controller import PickPlaceController
-from .sequence_ui import STEPS, DemoGripper, SequenceStopped, SessionRobot, initial_recipe, resolve_recipe
+from .sequence_ui import STEPS, DemoGripper, SequenceStopped, SessionRobot, initial_recipe, resolve_recipe, load_vision_job
 
 
 JOG_STOP_ACCEL = 1.0
@@ -122,6 +122,7 @@ class ManualService:
     def stop(self):
         with self._lock:
             self._generation += 1  # Cancel any movement queued before this stop.
+            self._preview = None
             self._jog_id = None
             self._message = 'Stop requested'
             self._stop_requested.set()
@@ -177,7 +178,26 @@ class ManualService:
             if self._pending or self._motion:
                 raise ValueError('Wait for movement to finish before previewing')
             recipe, names = resolve_recipe(self._recipe, self.settings, self.store, payload, self.demo)
-            plan = PickPlaceController(recipe).plan()
+            self._preview = None
+            if payload.get('vision_file'):
+                if not self._connected:
+                    raise ValueError('Connect to the robot before a live vision preview')
+                task = dict(payload=payload, recipe=recipe, names=names, done=threading.Event())
+                self._pending = 'preview_vision'
+                self._queue.put_nowait(('preview_vision', task, self._generation))
+            else:
+                return self._save_sequence_preview(recipe, names, payload)
+        # The existing worker owns camera/RTDE operations; HTTP heartbeats remain live.
+        if not task['done'].wait(60):
+            self.stop()
+            raise ValueError('Vision preview timed out; check the camera and retry')
+        if 'error' in task:
+            raise ValueError(task['error'])
+        return task['result']
+
+    def _save_sequence_preview(self, recipe, names, payload, *, job=None, record=None, plan=None):
+        with self._lock:
+            plan = plan if plan is not None else PickPlaceController(recipe).plan()
             public = dict(id=secrets.token_urlsafe(18), plan=plan, names=names,
                           gripper=recipe.gripper.kind, grasp_offset_mm=recipe.grasp_offset_mm,
                           pick_force_n=recipe.pick_probe.contact_force_n,
@@ -187,10 +207,44 @@ class ManualService:
             if self.sequence_path:
                 atomic_json(self.sequence_path, payload)
             self._selection = json.loads(json.dumps(payload))
-            self._preview = dict(recipe=recipe, public=public)
+            if record:
+                public['vision'] = record['plan']
+            self._preview = dict(recipe=recipe, public=public, vision_job=job, vision_record=record,
+                                 vision_file=payload.get('vision_file'))
             self._sequence = dict(running=False, status='previewed', step=None,
                                   message='Preview ready · one cycle', history=[])
             return public
+
+    def _preview_vision(self, task):
+        from .vision.cli import Runtime, _close
+        from .vision.observe import Observer, check_camera_identity
+        from .vision.robot_state import ControlPoseSource
+
+        camera = None
+        try:
+            self._sequence_tick()
+            job = load_vision_job(task['recipe'], task['payload']['vision_file'])
+            camera = Runtime.camera(job.config.camera)
+            check_camera_identity(camera, job.calibration)
+            source = ControlPoseSource(self.control, self.receive)
+            observer = Observer(job.config, job.calibration, camera, source, tick=self._sequence_tick)
+            observations = {role: observer.look(role) for role in job.roles}
+            plan = job.compose(observations, source.snapshot().tcp_offset, strict=False)
+            record = job.preview_record(plan)
+            self._sequence_tick()
+            task['result'] = self._save_sequence_preview(task['recipe'], task['names'], task['payload'],
+                job=job, record=record, plan=plan['envelope'])
+        except Exception as exc:
+            task['error'] = str(exc)
+            self._preview = None
+        finally:
+            try:
+                if camera:
+                    _close(camera)
+            except Exception as exc:
+                task['error'] = str(exc)
+                self._preview = None
+            task['done'].set()
 
     def seed_demo_poses(self):
         if not self.demo:
@@ -235,6 +289,7 @@ class ManualService:
             if not self._preview or payload.get('preview_id') != self._preview['public']['id']:
                 raise ValueError('Preview expired; preview again')
             recipe = self._preview['recipe']
+            vision_preview = self._preview
             self._preview = None  # A preview authorizes only one cycle.
             self._sequence = dict(running=True, status='running', step=None,
                                   message='Checking robot and gripper', history=[])
@@ -248,7 +303,24 @@ class ManualService:
                 from .grippers.adapters import connect_gripper
                 gripper = connect_gripper(recipe.gripper, recipe.robot_ip)
                 gripper.tick, gripper.pause = self._sequence_tick, robot.pause
-            PickPlaceController(recipe, robot, gripper, on_step=self._sequence_step).run()
+            if vision_preview.get('vision_job') is not None:
+                from .vision.cli import Runtime, _close
+                from .vision.observe import check_camera_identity
+                from .poses import atomic_json
+                job = load_vision_job(recipe, vision_preview['vision_file'])
+                job.check_preview(vision_preview['vision_record'])
+                camera = Runtime.camera(job.config.camera)
+                try:
+                    check_camera_identity(camera, job.calibration)
+                    from types import SimpleNamespace
+                    plan = job.execute(vision_preview['vision_record'], SimpleNamespace(robot=robot, gripper=gripper),
+                        camera, on_step=lambda message: self._sequence_step('vision', message))
+                    if self.sequence_path:
+                        atomic_json(self.sequence_path.with_name('latest_vision_pick.json'), job.public(plan))
+                finally:
+                    _close(camera)
+            else:
+                PickPlaceController(recipe, robot, gripper, on_step=self._sequence_step).run()
             with self._lock:
                 self._sequence.update(status='completed', message='One cycle completed')
                 self._message = 'One pick/place cycle completed'
@@ -326,6 +398,13 @@ class ManualService:
         return feedback
 
     def _execute(self, command, payload, generation):
+        if command == 'preview_vision':
+            if generation != self._generation:
+                payload['error'] = 'Vision preview cancelled; preview again'
+                payload['done'].set()
+                return
+            self._preview_vision(payload)
+            return
         if command == 'connect':
             self._preview = None
             self._message = 'Connecting to RTDE…'

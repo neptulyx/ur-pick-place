@@ -104,12 +104,15 @@ def intrinsics_checker(calibration, camera_config):
     recorded = calibration.recorded_camera_intrinsics or calibrated
 
     def check(frame):
-        live = check_intrinsics(frame.intrinsics, 'camera intrinsics')
         height, width = frame.bgr.shape[:2]
-        if (live['width'], live['height']) != (calibrated['width'], calibrated['height']) or \
-                (width, height) != (calibrated['width'], calibrated['height']):
+        if (width, height) != (calibrated['width'], calibrated['height']):
             raise VisionError(f'Camera stream {width}x{height} does not match the calibrated '
                               f'{calibrated["width"]}x{calibrated["height"]} profile')
+        if camera_config.provider == 'basler':
+            return calibrated  # Lens intrinsics come from calibration, not the SDK.
+        live = check_intrinsics(frame.intrinsics, 'camera intrinsics')
+        if (live['width'], live['height']) != (width, height):
+            raise VisionError('Camera intrinsics dimensions differ from the image')
         mismatch = max(abs(live[k] - recorded[k]) for k in ('fx', 'fy', 'ppx', 'ppy'))
         if mismatch > camera_config.max_intrinsics_mismatch_px:
             raise VisionError(f'Camera intrinsics differ from the recorded capture profile by {mismatch:.2f} px '
@@ -119,13 +122,17 @@ def intrinsics_checker(calibration, camera_config):
 
 
 def open_camera(camera_config):
-    """Open the RealSense colour stream (lazy SDK import) and let exposure settle."""
-    try:
-        from charuco_realsense.camera import RealsenseCamera, StreamConfig
-    except ImportError as exc:
-        raise VisionError('Live capture needs charuco-realsense and pyrealsense2 (vision extra)') from exc
-    camera = RealsenseCamera(camera_config.serial, StreamConfig(camera_config.width, camera_config.height,
-                                                                camera_config.fps))
+    """Open the selected camera (lazy SDK import) and let exposure settle."""
+    if camera_config.provider == 'basler':
+        from .cameras import BaslerCamera
+        camera = BaslerCamera(camera_config)
+    else:
+        try:
+            from charuco_realsense.camera import RealsenseCamera, StreamConfig
+        except ImportError as exc:
+            raise VisionError('Live capture needs charuco-realsense and pyrealsense2 (vision extra)') from exc
+        camera = RealsenseCamera(camera_config.serial, StreamConfig(camera_config.width, camera_config.height,
+                                                                    camera_config.fps))
     try:
         deadline = time.monotonic() + camera_config.warmup_s
         while time.monotonic() < deadline:
@@ -165,7 +172,7 @@ class RobotMover:
         self.robot.move_linear(pose)  # workspace + isPoseWithinSafetyLimits inside
 
 
-def refine_tcp_pose(observation, target, calibration, tcp_offset, refine, current_tcp_pose, view=None):
+def refine_camera_pose(observation, target, refine, view=None):
     """TCP pose for the close-up view of the target.
 
     With ``view`` (``T_camera_target`` recorded when the grasp was taught) the camera
@@ -188,6 +195,11 @@ def refine_tcp_pose(observation, target, calibration, tcp_offset, refine, curren
         camera = np.eye(4)
         camera[:3, :3] = np.column_stack([x, np.cross(z, x), z])
         camera[:3, 3] = centre - refine.distance_m * z
+    return camera
+
+
+def refine_tcp_pose(observation, target, calibration, tcp_offset, refine, current_tcp_pose, view=None):
+    camera = refine_camera_pose(observation, target, refine, view)
     tcp = camera @ invert(calibration.camera_in_flange) @ pose_to_matrix(tcp_offset)
     current = pose_to_matrix(current_tcp_pose)
     move_mm = float(np.linalg.norm(tcp[:3, 3] - current[:3, 3])) * 1000
@@ -199,11 +211,12 @@ def refine_tcp_pose(observation, target, calibration, tcp_offset, refine, curren
 
 
 class Observer:
-    def __init__(self, config, calibration, camera, pose_source, *, mover=None, on_step=None, views=None):
+    def __init__(self, config, calibration, camera, pose_source, *, mover=None, on_step=None, views=None, tick=None):
         self.config, self.calibration, self.camera = config, calibration, camera
         self.pose_source, self.mover = pose_source, mover
         self.views = views or {}  # role -> taught T_camera_target for the refine view
         self.on_step = on_step or (lambda message: None)
+        self.tick = tick or (lambda: None)
         self._check = intrinsics_checker(calibration, config.camera)
         self._targets = {}
 
@@ -213,10 +226,10 @@ class Observer:
             self._targets[role_name] = target_from_config(role.target, self.config.base_dir)
         return self._targets[role_name]
 
-    def look(self, role_name, *, allow_motion=False):
+    def look(self, role_name, *, allow_motion=False, from_current=False):
         role = self.config.role(role_name)
         target = self.target(role_name)
-        if allow_motion:
+        if allow_motion and not from_current:
             if self.mover is None:
                 raise VisionError('Observe motion requires an RTDE control session')
             self.on_step(f'Moving to {role_name} observe joints')
@@ -229,21 +242,38 @@ class Observer:
             return observation
         snapshot = self.pose_source.snapshot()
         view = self.views.get(role_name)
+        desired_camera = refine_camera_pose(observation, target, role.refine, view)
+        desired_view = invert(desired_camera) @ observation.base_target
         pose = refine_tcp_pose(observation, target, self.calibration, snapshot.tcp_offset, role.refine,
                                snapshot.tcp_pose, view)
         self.on_step(f'Refining {role_name}: moving camera to the '
                      f'{"taught marker-relative view" if view is not None else "frontal close-up view"}')
         self.mover.move_linear(pose)
         refined = self._capture(role_name, target)
+        error_mm, error_deg = view_error(refined.camera_target, desired_view)
+        refined.quality['refine_view_error_mm'] = error_mm
+        refined.quality['refine_view_error_deg'] = error_deg
+        if error_mm > role.refine.max_view_error_mm or error_deg > role.refine.max_view_error_deg:
+            raise VisionError(f'Refine view did not converge: {error_mm:.2f} mm / {error_deg:.2f} deg '
+                              f'(limits {role.refine.max_view_error_mm:g} mm / '
+                              f'{role.refine.max_view_error_deg:g} deg); check calibration or reframe and retry')
         refined.refined = True
         refined.first_pass = observation.summary()
         return refined
 
     def _capture(self, role_name, target):
-        if self.config.robot.settle_s:
-            time.sleep(self.config.robot.settle_s)
+        deadline = time.monotonic() + self.config.robot.settle_s
+        while time.monotonic() < deadline:
+            self.tick()
+            time.sleep(min(.02, max(0, deadline - time.monotonic())))
+        self.tick()
+        # Discard stream frames acquired during motion before taking pose feedback.
+        for _ in range(2):
+            self.tick()
+            self.camera.read()
         before = self.pose_source.snapshot()
         def checked_frame(frame):
+            self.tick()
             require_stationary(before, self.pose_source.snapshot(), self.config.robot.stationary_joint_rad)
             return self._check(frame)
         quality = self.config.quality
@@ -256,3 +286,8 @@ class Observer:
                            base_target=base_camera @ measurement.camera_target, robot=before.summary(),
                            quality=measurement.details, refined=False,
                            calibration_sha256=self.calibration.sha256)
+
+
+def view_error(actual, expected):
+    return (float(np.linalg.norm(actual[:3, 3] - expected[:3, 3])) * 1000,
+            math.degrees(rotation_angle(actual, expected)))

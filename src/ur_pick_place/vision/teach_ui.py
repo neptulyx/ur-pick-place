@@ -226,7 +226,13 @@ class TeachingService:
                 raise ValueError('Complete the current validation motion before recording alignment')
             if body.get('result') not in ('aligned', 'misaligned'):
                 raise ValueError('Choose aligned or misaligned')
-            self.project.record_validation(dict(record, visual_result=body['result']))
+            review = dict(record, visual_result=body['result'])
+            if body.get('measured_error_mm') is not None:
+                values = vector(body['measured_error_mm'], 3, 'Measured TCP error XYZ (mm)')
+                error = math.sqrt(sum(v*v for v in values))
+                review.update(measured_error_mm=values, measured_position_error_mm=error,
+                              within_2mm=error <= 2)
+            self.project.record_validation(review)
             return self.state()
 
     def configure(self, body):

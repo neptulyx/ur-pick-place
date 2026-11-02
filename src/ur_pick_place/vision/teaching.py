@@ -27,7 +27,7 @@ from .robot_state import ReceivePoseSource, require_stationary
 from .targets import same_target, target_from_config
 from .transforms import matrix_to_pose
 
-VERSION = '0.2.9'
+VERSION = '0.3.0'
 
 
 def digest(path):
@@ -98,6 +98,7 @@ def defaults(repo):
                          'calibration': calibrations[0]['path'] if calibrations else '',
                          'robot_ip': calibrations[0]['robot_ip'] if calibrations else '',
                          'tcp': calibrations[0]['tcp'] if calibrations else [0.0] * 6,
+                         'camera_provider': 'realsense', 'refine_before_pick': True,
                          'target': target,
                          'motion_model': 'planar', 'approach_mm': 100.0, 'limits': asdict(Limits())}}
 
@@ -120,6 +121,8 @@ class TeachingProject:
         raw = {k: settings[k] for k in ('calibration', 'robot_ip', 'tcp', 'target', 'motion_model', 'approach_mm')}
         raw['calibration'] = str(Path(raw['calibration']).expanduser().resolve())
         raw['limits'] = settings.get('limits', asdict(Limits()))
+        raw['camera_provider'] = settings.get('camera_provider', 'realsense')
+        raw['refine_before_pick'] = settings.get('refine_before_pick', False)
         raw['tcp'] = vector(raw['tcp'], 6, 'Active gripper TCP offset (m/rad)')
         raw['approach_mm'] = number(raw['approach_mm'], 'Approach height (mm)', low=1, high=300)
         if not isinstance(raw['robot_ip'], str) or not raw['robot_ip'].strip() or any(c.isspace() for c in raw['robot_ip']):
@@ -145,11 +148,13 @@ class TeachingProject:
                 'JSON/API values use metres.')
         stream = read_json(raw['calibration']).get('camera', {}).get('stream', {})
         self.config = VisionConfig(handeye_calibration=raw['calibration'],
-            camera={'serial': self.calibration.camera_serial, 'width': self.calibration.intrinsics['width'],
+            camera={'provider': raw.get('camera_provider', 'realsense'),
+                    'serial': self.calibration.camera_serial, 'width': self.calibration.intrinsics['width'],
                     'height': self.calibration.intrinsics['height'], 'fps': stream.get('fps', 15)},
             robot={'active_tcp_offset': raw['tcp']},
             pick={'target': raw['target'], 'observe_joints': [0.0] * 6, 'grasp': 'grasp_pick.json',
-                  'motion_model': raw['motion_model'], 'limits': raw['limits']}, base_dir=str(self.directory))
+                  'motion_model': raw['motion_model'], 'limits': raw['limits'],
+                  'refine': {'enabled': raw.get('refine_before_pick', False)}}, base_dir=str(self.directory))
         self.inputs = {'calibration': self.calibration.sha256}
         if self.target.kind == 'charuco':
             self.inputs['manifest'] = digest(raw['target']['board_manifest'])
@@ -164,7 +169,10 @@ class TeachingProject:
             saved = read_json(path)
             if saved.get('schema_version') != 1 or saved.get('type') != 'marker_pick_project':
                 raise ValueError('Unsupported teaching project')
-            if saved['settings'] != raw or saved['inputs'] != self.inputs:
+            saved_settings = dict(saved['settings'])
+            saved_settings.setdefault('camera_provider', 'realsense')
+            saved_settings.setdefault('refine_before_pick', False)
+            if saved_settings != raw or saved['inputs'] != self.inputs:
                 raise ValueError('This folder belongs to different settings or changed input files. '
                                  'Choose a new project folder to teach again.')
             self.flow = saved['flow']
@@ -216,6 +224,8 @@ class TeachingProject:
                 _close(camera)
                 if preview.last is not None:
                     image = preview.last
+                    if image.ndim == 2:
+                        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
                     if observation is not None:
                         from .detection import camera_matrix
                         k, distortion = camera_matrix(self.calibration.intrinsics)
@@ -327,7 +337,7 @@ class TeachingProject:
         model = load_taught(self.directory / 'grasp_pick.json')
         pose, report = target_pose(model, observation, self.config.pick,
             calibration_sha256=self.calibration.sha256, tcp_offset=observation.robot['tcp_offset'],
-            target=self.target, strict=True)
+            target=self.target, strict=not self.config.pick.refine.enabled)
         pick = matrix_to_pose(pose)
         approach = list(pick)
         approach[2] += self.settings['approach_mm'] / 1000.0  # BASE +Z, not marker or tool Z
@@ -339,6 +349,7 @@ class TeachingProject:
                     'pick_tcp_pose_m_rad': pick, 'approach_tcp_pose_m_rad': approach,
                     'approach_axis': 'base +Z', 'approach_mm': self.settings['approach_mm'],
                     'descent_axis': 'base -Z', 'quality': observation.quality, 'validation': report,
+                    'refinement_required': self.config.pick.refine.enabled and not observation.refined,
                     'purpose': 'target snapshot only; executor must check freshness, TCP, reachability, '
                                'workspace, force parameters, travel/time bounds and grip feedback'}
         return exported

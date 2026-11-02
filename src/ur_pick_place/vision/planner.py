@@ -42,12 +42,14 @@ class VisionJob:
         self.inputs = dict(inputs or {}, calibration=calibration.sha256,
                            **{f'{role}_grasp': self.models[role].sha256 or self.models[role].source
                               for role in self.roles})
+        self.inputs.update({f'{role}_board': file_sha256(target.source)
+                            for role, target in self.targets.items() if target.kind == 'charuco'})
 
     @property
     def views(self):
         """Taught marker-relative camera views to reproduce during refine."""
         return {role: model.taught_view for role, model in self.models.items()
-                if model.taught_refined and model.taught_view is not None}
+                if model.taught_view is not None}
 
     def compose(self, observations, tcp_offset, *, strict=True):
         """Targets from observations, validated; raises before anything can move."""
@@ -128,8 +130,9 @@ class VisionJob:
         """Execution-time observations with observe/refine motion through ``robot`` (RTDERobot)."""
         source = ControlPoseSource(robot.control, robot.receive)
         observer = Observer(self.config, self.calibration, camera, source, mover=RobotMover(robot), on_step=on_step,
-                            views=self.views)
-        observations = {role: observer.look(role, allow_motion=True) for role in self.roles}
+                            views=self.views, tick=getattr(robot, 'tick', None))
+        observations = {role: observer.look(role, allow_motion=True,
+                        from_current=(role == 'pick' and self.config.pick.refine.enabled)) for role in self.roles}
         return observations, source.snapshot().tcp_offset
 
     def execute(self, preview, controller, camera, *, on_step=None, consume=None):
