@@ -1,770 +1,197 @@
 # ur-pick-place
 
-Standalone Python package for force-guided Universal Robots pick/place. No Qt,
-GUI, preset database, or dependency on `Universal_Robot_External_GUI`.
+Teach waypoints and run force-guided pick-and-place cycles on a Universal Robots
+arm with an OnRobot RG2 or Arduino gripper. An optional camera UI teaches a pick
+position relative to an ArUco marker or ChArUco board.
 
-The package executes:
+| UI | Start command | Address | Use it to |
+| --- | --- | --- | --- |
+| Robot Bench | `./start.sh` | http://127.0.0.1:8765 | Record waypoints and run a pick-and-place cycle |
+| Marker Pick Teacher | `./start_marker_teach.sh` | http://127.0.0.1:8766 | Teach, export and validate camera-derived pick positions |
 
-1. Joint move to the configured home waypoint; open the gripper.
-2. Linear approach above a camera-derived pick target.
-3. Descend along base -Z in force mode until contact or the pick endpoint.
-4. Stop force mode, apply any contact backoff and JSON grasp offset, then grip.
-5. Verify grip, lift, verify again, joint move through home, verify again.
-6. Approach placement, force-descend until contact, stop force mode, verify
-   release, and retract from the measured contact pose.
+## 1. Try Robot Bench without hardware
 
-Both OnRobot RG2 and the supplied Arduino servo/pressure-pad firmware are
-supported. RG2 is the default, matching the previously tested procedure.
+From this repository, run:
 
-## Marker Pick Teacher — separate guided app
+```sh
+./start.sh --demo
+```
+
+The launcher creates `.venv`, installs dependencies and opens the browser. Python
+3.12 is recommended; Python needs `venv` support. Keep the terminal running.
+
+1. Click **Connect RTDE** to connect to the simulated robot.
+2. Open **Joint & force tests** at the top of the page.
+3. Click **Load demo poses**.
+4. Click **Preview cycle** and review the summary.
+5. Click **Run one cycle** and watch the six progress stages.
+
+Demo mode simulates the robot and gripper. Its saved poses are separate from live
+poses and cannot be used for live motion.
+
+## 2. Connect a real robot
+
+Stop the demo with `Ctrl+C` in its terminal, then run:
+
+```sh
+./start.sh
+```
+
+1. On the robot, configure the active gripper TCP, payload and remote control.
+   Disconnect other applications that control the robot through RTDE.
+2. In Robot Bench, enter the **Robot IP**.
+3. While disconnected, expand **Motion limits & workspace**, set speeds and XYZ
+   bounds for your cell, then click **Save settings**. The bounds must include the
+   current TCP and the intended targets.
+4. Click **Connect RTDE**. Check that live TCP and joint readings appear.
+
+Start at reduced speed with the physical emergency stop available. Motion checks
+cover TCP workspace limits and robot safety/reachability; they do not detect
+obstacles or check the whole arm's path. Hardware operation still requires
+validation on your cell; automated tests use simulated hardware.
+
+## 3. Record Home, Pick and Place
+
+On **Record waypoints**, repeat these steps for each position:
+
+1. Position the robot with the pendant or **Jog the TCP** controls. Hold a direction
+   button to move; release it to stop. Position and rotation use robot-base axes.
+2. Wait for the robot to stop.
+3. Enter a **Pose name** such as `home`, `pick` or `place`.
+4. Click **Record current pose**. The saved card contains both TCP coordinates
+   and joint angles.
+
+Use a clear transit position for Home. Teach Pick as the lowest intended search
+endpoint, with tool Z within 20° of base −Z. Place sets the placement XY,
+orientation and reference height; release occurs at the detected contact pose.
+
+On a saved pose card:
+
+- **Load target** fills the target fields without moving.
+- **Move TCP** moves linearly to the saved TCP pose.
+- **Move joints** moves to the saved joint angles.
+- **Update from current** replaces the pose with the stopped robot's current pose.
+- **Rename** changes its name.
+
+For an absolute move, click **Use current**, edit **TCP target**, then click
+**Move to TCP target**. XYZ uses millimetres; Rx/Ry/Rz are rotation-vector
+components in degrees, not roll/pitch/yaw.
+
+## 4. Preview and run a pick-and-place cycle
+
+1. Open **Joint & force tests**. To test a waypoint alone, choose a **Joint
+   waypoint** and click **Test joint move**; this does not operate the gripper.
+2. In **Pick & place setup**, select **Home**, **Pick** and **Place**. Home uses
+   saved joint angles; Pick and Place use saved TCP poses.
+3. Choose **Gripper type** and configure it:
+   - **OnRobot RG2:** open width, grip width and grip force.
+   - **Arduino gripper:** serial port, close command and calibrated grip/release
+     thresholds for both pressure pads. These are raw readings, not newtons.
+4. Expand **Force, approach & grasp offset**. Review approach heights, forces,
+   descent limits/speeds, earlier-contact backoff, grasp offset, lift and retract.
+   Backoff and XYZ offsets change where the gripper closes after contact; set
+   them to zero if you intend to grip at the contact pose.
+5. Click **Preview cycle** and review the selected poses and settings.
+6. With the path clear, click **Run one cycle**.
+
+The cycle goes through Home/open → pick approach → force search → offset/grip →
+verify/lift/Home → force-place/retract. Pick descent stops at contact or its taught
+endpoint; placement requires contact before release.
+
+Keep the tab active during movement. **Stop motion** cancels the sequence without
+opening the gripper or moving to a recovery position. A lost UI heartbeat also
+cancels it. This is a software stop; use the robot's physical emergency stop when
+needed. Inspect the robot and gripper before restarting.
+
+Each run uses one preview. Preview again before another run and after changing
+settings or waypoints. Manual movement and pose recording are blocked during a cycle.
+
+## 5. Teach a camera-derived pick (optional)
+
+You need a calibrated wrist camera, its `calibration.json` from `ur10e-handeye`,
+and a measured ArUco marker or ChArUco board fixed to the object. Keep the camera
+mounting and camera profile unchanged from calibration. Vision needs Python 3.11–3.13
+(3.12 recommended); live capture also needs `charuco-generator` and
+`charuco-realsense`. The launcher installs those sibling repositories if present.
 
 ```sh
 ./start_marker_teach.sh
 ```
 
-Opens **http://127.0.0.1:8766**. This is a separate guided teaching app in
-this repository, reusing its vision formats and picking controller. Calibration
-stays in `ur10e-handeye`; no extra repository or Tk installation is needed.
-Starting it again opens the existing app and preserves its current work. If
-another application uses that port, run `./start_marker_teach.sh --port 8767`.
+Open http://127.0.0.1:8766. Follow the five steps with **Next** and **Back**:
 
-The interface shows one step at a time with Back/Next navigation and completion
-lights. Project paths and movement limits live under **Project & advanced settings**.
+1. **Set up:** choose the calibration, robot IP and marker type. For ChArUco,
+   select the **Printed picking board** attached to your object, or enter its
+   manifest and board name. The calibration board is not needed in view during
+   picking. For ArUco, enter dictionary, ID and
+   measured outer black-square size, excluding the white margin. Copy the active
+   TCP offset from PolyScope **Installation → TCP**: XYZ in millimetres and
+   RX/RY/RZ in rotation-vector radians. It must match the calibration TCP.
+   Confirm the checkbox, then click **Check setup & continue →**.
+   Under **Project & advanced settings**, choose a project folder, approach height
+   (default 100 mm) and movement limits. Use **XY + yaw** for an object on a flat
+   support, or **Full 3D pose** to follow its full pose.
+2. **Capture marker:** use the pendant to make the whole target visible, stop the
+   arm, then click **Capture marker**. Review the image and detected axes.
+3. **Teach pick:** keep the marker and object fixed. Pendant-jog the gripper to
+   the desired final pick endpoint and orientation, then stop. Confirm that the
+   marker has not moved and click **Read current TCP & save pick**. Check that
+   the joint-motion path is clear, then click **Return to observation pose**.
+   Return speed and workspace bounds are under Step 5’s **Test motion settings**.
+4. **Read & export:** after returning to the saved observation joints and stopping,
+   click **Read marker & export poses**. Download **Pick pose JSON**
+   (`target.json`); the approach is above the pick along robot-base +Z.
+5. **Validation:** reposition the marker and object together within the allowed
+   movement range. Set workspace bounds and speeds under **Test motion settings**.
+   Check the joint-motion path, click **Return to observation pose**, stop, then
+   click **Capture for validation**. Review the image and calculated target.
+   Confirm the marker stayed fixed and the linear path is clear, then click
+   **Move at fixed Z**. This follows the pick XY and orientation while holding
+   TCP Z at the capture height; it does not operate the gripper. The approach
+   height setting applies to exports, not this test. Keep the tab active. After
+   the move, visually check alignment and choose **Alignment looks correct** or
+   **Alignment needs adjustment**.
 
-1. **Set up:** choose your `calibration.json`, robot IP and ChArUco board manifest/name.
-   The saved hand-eye calibration supplies the camera-to-robot transform. Use
-   **Printed picking board** to select the target on your object separately;
-   for the 80 × 80 mm tank labels, choose `tank01`–`tank16` matching your print
-   (the current cell uses `tank15`). New projects prefer an 80 × 80 mm board and
-   remember the most recently captured picking target. The calibration board
-   is not needed in the camera view during picking.
-   A single ArUco marker is also supported: enter dictionary, ID and its measured
-   outer black side length (for example, 80 mm). Check the active gripper TCP.
-   Enter its XYZ offset in **millimetres** and RX/RY/RZ in **rotation-vector radians**,
-   copying the active offset from PolyScope **Installation → TCP**. The page shows
-   the calibration TCP in the same units; saved JSON and API values use metres/radians.
-   Local calibration copies under `data/calibrations/*/calibration.json` appear
-   first in the calibration list, ahead of the original hand-eye sessions.
-2. **Capture:** pendant-jog until the entire target is visible, stop, then capture.
-   A multi-frame quality check and image with coordinate axes confirm the result.
-3. **Teach:** keep the object/marker fixed. Pendant-jog the gripper to the desired
-   final pick endpoint, including orientation. Stop, confirm the marker stayed
-   fixed, and click **Read current TCP & save pick**. Once saved, click
-   **Return to observation pose** to restore the Step 2 joint positions.
-4. **Read/export:** after returning with the Step 3 button, continue to step 4.
-   Re-read the marker to calculate a fresh pick endpoint and an approach **100 mm
-   above it along robot-base +Z**. Green lights indicate completed steps.
-5. **Validation:** reposition the marker and object together, return to the saved
-   observation joints, stop, and choose **Capture for validation**. Use the
-   **Return to observation pose** button after checking the joint-motion path and
-   workspace bounds. Return speed defaults to 3°/s (range 1–6°/s). This uses the
-   saved Step 2 joint angles, can change TCP Z, and does not capture automatically.
-   Both Steps 3 and 5 use a single-click return button without a separate checkbox;
-   check the path is clear before clicking. Shared return speed and workspace bounds
-   are under Step 5's **Test motion settings**.
-   Stop motion and the active-tab heartbeat apply to return moves too.
-   Review the captured image/axes, marker pose, calculated pick and fixed-height validation target, and
-   displacement/rotation from teaching. The validation target follows the pick XY
-   and orientation while holding TCP Z at the height recorded by this capture;
-   the step-1 approach height applies to exports, not this validation move. Validation preserves the original teaching
-   reference and step-4 exports. A saved taught pick unlocks this step, including
-   after reopening a project; a fresh step-4 export is not required because
-   validation captures its own image. Set the XYZ workspace bounds for your cell and a
-   test speed (default 10 mm/s, maximum 20 mm/s), confirm the marker stayed fixed
-   and the linear path is clear, then choose **Move at fixed Z**.
-   This commands one linear move at the captured TCP height without operating
-   the gripper. Keep the tab active. **Stop motion** stays visible in the header;
-   losing the UI heartbeat stops motion. This is a software stop, not an emergency
-   stop. Workspace/robot checks do not check for whole-arm or path collisions.
+Return moves use saved joint angles and can change TCP Z; the default return
+speed is 3°/s. Check clearance before clicking either return button.
 
-   Each motion attempt consumes one validation capture, which expires after
-   60 seconds. The active TCP, unchanged calibration/grasp, stationary starting
-   robot, starting pose, workspace, robot safety limits and inverse kinematics
-   are checked before motion. Return to observation and capture again for
-   each test. Results show measured TCP agreement with the commanded validation target
-   (within 1 mm / 0.005 rad); separately record **Alignment looks correct** or
-   **Alignment needs adjustment** after checking the gripper against the intended
-   pick XY and orientation at the captured height. Step 5 turns green only after a completed move is marked visually aligned.
-   History is saved in `validation_history.json`; reopening a project requires a
-   fresh capture before motion. TCP agreement alone does not measure camera accuracy.
+Each validation attempt needs a new capture less than 60 seconds old. Step 5 turns
+green only after a completed move is marked visually aligned. TCP arrival checks
+alone do not establish camera accuracy. **Stop motion** stays in the header.
 
-The camera mounting must match calibration. During teaching/capture, the active
-TCP must also match `camera_in_tcp.tcp_offset` in that file; the app cannot set it
-for you. Keep this same gripper TCP for teaching and execution. Tool Z must point
-within 20 degrees of base -Z for the existing force-guided sequence.
+To resume teaching, enter the project folder under **Project & advanced settings**
+and click **Open saved project**, then recheck the active TCP. Capturing a new
+teaching reference requires teaching the pick again.
 
-Choose **XY + yaw** when the object moves on a flat support (the marker itself may
-be vertical). **Full 3D** follows the measured pose, within the configured limits.
-Defaults permit 100 mm target displacement, 180 degrees rotation and 10 degrees tilt
-change; planar mode also limits height change to 10 mm. Re-teach for another
-working area. Use **Allowed movement from the taught target** in step 1 to set
-the displacement/rotation range; the execution recipe still checks its workspace.
+## 6. Use the camera pick in Robot Bench
 
-Projects persist under `data/marker-teaching/`. Enter a folder and choose **Open
-saved project**, or launch with `--project PATH`, to resume after checking the TCP.
-Capturing a new teaching reference invalidates the old pick relationship and
-archives it under `history/`. Failed fresh reads remove the previous generated
-pose exports. SDK operations run in a child process with a 90-second timeout.
+1. In Marker Pick Teacher, re-read the marker and download a fresh `target.json`.
+2. In Robot Bench, open **Joint & force tests → Camera target** and load that file.
+   It overrides the saved Pick selection.
+3. Set **Pick approach** to the teacher's approach height (100 mm by default).
+4. Select your taught Home/Place and gripper settings, then **Preview cycle**.
+5. Review the path and settings, then click **Run one cycle**.
 
-| File | Purpose |
-| --- | --- |
-| `vision.json` + `grasp_pick.json` | Reusable configuration and taught marker-to-gripper relationship for the existing vision CLI |
-| `observation.json` | Teaching reference, quality and observation joints |
-| `target.json` | Fresh six-number pick TCP array accepted by Robot Bench's **Camera target** or `--pick-pose-file` |
-| `pick_target.json` | Pick and approach poses, timestamp, TCP, calibration identity and quality |
-| `target.script` | URScript variables `vision_pick` and `vision_approach`; no motion commands |
-| `validation_capture.json` + `validation.jpg` | Latest validation snapshot and annotated image; saved snapshots cannot authorize motion after restart |
-| `validation_history.json` | Motion outcomes, measured TCP errors and user-recorded visual alignment |
+Exported targets are static snapshots: re-read and reload for each new pick.
+Camera target JSON uses `[x, y, z, rx, ry, rz]` in the robot base frame,
+**metres and rotation-vector radians**.
 
-All exported poses use the **robot base frame**, metres and UR rotation-vector
-radians. Re-read the marker for each cycle; a downloaded/exported file is a static
-snapshot and does not update automatically. Keep all project files together;
-original calibration/manifest paths must remain accessible on the executing PC.
+## Saved files and useful commands
 
-### Execute using the existing picking software
-
-In Robot Bench, load `target.json` into **Camera target**, set pick approach to
-**100 mm**, and preview/run the configured cycle with your taught home/place poses
-and gripper settings. Repeat the marker read and target import for every new pick.
-For an automated fresh read each cycle, use the saved vision project with the CLI:
+Robot Bench saves poses automatically in `data/live/poses.json` (demo:
+`data/demo/poses.json`). **Export JSON** downloads the pose library. Marker
+teaching projects default to `data/marker-teaching/`; keep their files together
+and retain access to the referenced calibration and board manifest.
 
 ```sh
-# From this repository; replace PROJECT with your saved project folder.
-./start.sh vision vision-pick --config pick_place.json --vision PROJECT/vision.json \
-  --preview-out PROJECT/cycle_preview.json
-
-# After reviewing the preview; this command MOVES the robot and operates the gripper.
-./start.sh vision vision-pick --config pick_place.json --vision PROJECT/vision.json \
-  --execute --preview PROJECT/cycle_preview.json
+./start.sh --config pick_place.json  # Load recipe defaults into Robot Bench
+./start.sh --no-browser --port 8765  # Open the browser address manually
+./start_marker_teach.sh --port 8767 # Use another port
+./start.sh test                     # Run offline tests
+./start.sh pick-place --help        # Pick-and-place CLI options
+./start.sh vision --help            # Camera CLI options
 ```
 
-Configure `pick_approach_mm: 100` in your recipe. Its force search descends along
-base -Z until contact or the taught endpoint; reaching the endpoint can also allow
-a grip. Force mode is stopped before gripping. To grip at contact, set
-`pick_backoff_mm: 0` and `grasp_offset_mm: [0, 0, 0]`; configure force, speed, travel,
-timeout, lift and gripper feedback for your cell. The recipe defaults may apply a
-backoff after contact, so review them. The teacher never runs a force search.
-
-For PolyScope/URScript, load the exported pose variables into your own program:
-**approach → bounded base -Z force search → end force mode → grip/verify → lift**.
-Lift from the actual contact pose. Use a force task frame aligned with robot-base Z;
-force compliance is defined in the task frame ([UR force mode reference](https://www.universal-robots.com/manuals/EN/HTML/SW5_25/Content/prod-scriptmanual/all_scripts/force_mode_task_frame_selection_vector.htm)).
-Your program supplies contact detection, force/travel/time limits, grip feedback
-and motion checks. Pose export alone does not validate reachability or clearance.
-The new teacher is tested with rendered markers/fake robot feedback; physical
-teaching and execution still require validation on your cell.
-
-To verify Step 5 without hardware, run:
-
-```sh
-.venv/bin/python -m unittest discover -s tests -p 'test_marker_validation*.py' -v
-```
-
-With Node.js and Google Chrome installed, this includes an isolated browser test
-of all five steps through the real HTTP server and capture subprocesses. It tests
-rotated marker detection, fixed-height tracking motion, visual pass/fail history, expired/used
-captures, TCP mismatch, Stop and network-loss heartbeat stopping. Camera images
-are rendered and every robot interface is simulated; no hardware is contacted.
-
-## Start the backend and teaching UI
-
-From a clone of this repository:
-
-```bash
-chmod +x start.sh  # already executable in Git
-./start.sh
-```
-
-`start.sh` finds Python 3.12 (or 3.10–3.13), creates `.venv`, installs the
-package and hardware dependencies, starts the local backend, and opens Robot
-Bench at **http://127.0.0.1:8765**. Subsequent starts reuse the environment;
-dependencies are refreshed when package requirements change. Set
-`PYTHON_BIN=/path/to/python3.12` before the first start to select an interpreter.
-No system packages are installed. Creating a virtual environment requires
-Python's `venv` support on your system.
-
-The backend starts disconnected: enter your robot IP and click **Connect
-RTDE**. Configure TCP/payload and remote control on the robot as appropriate.
-Only one application should own RTDE control. Disconnect the original GUI or
-other robot controllers before connecting Robot Bench.
-
-```bash
-./start.sh --demo                     # try the UI without robot hardware
-./start.sh --config pick_place.json   # initialize IP, workspace and speed limits
-./start.sh --no-browser --port 8765    # backend only; open the URL yourself
-./start.sh setup                      # install dependencies without starting
-./start.sh test                       # offline tests
-```
-
-The same backend can be started with `ur-robot-ui` after package installation.
-It serves only on loopback. `--demo` never imports/connects RTDE and keeps its
-settings/poses separate from live recordings.
-
-### Two-page workflow
-
-Use the navigation at the top of Robot Bench:
-
-1. **Record waypoints** (`/waypoints`) shows live TCP/joint feedback, positioning
-   controls, pose recording, saved names and renaming. Position the robot here
-   and save each waypoint.
-2. **Joint & force tests** (`/testing`) lets you select a saved waypoint and
-   press **Test joint move**, or choose Home/Pick/Place plus **OnRobot RG2** or
-   **Arduino gripper** and preview/run a complete force-guided cycle. It also
-   shows live TCP/orientation/joint feedback while testing.
-
-The robot connection, saved waypoints, gripper settings and sequence status are
-shared between the pages. Navigation keeps unfinished form values and an
-active test intact. **Stop motion** remains available in the header on both
-pages. The root URL opens the waypoint page; either page can be opened directly
-or bookmarked. Switching pages does not create another RTDE connection.
-
-### Test the full sequence with buttons
-
-On **Joint & force tests**, the **Pick & place test** panel runs the complete cycle using the UI's existing
-RTDE connection. Keep Robot Bench connected; no separate terminal or second
-robot-control session is needed.
-
-1. Record your home, pick and placement poses in the pose library.
-2. Select them in **Home**, **Pick** and **Place**. Home uses recorded joints;
-   pick and place use recorded TCP coordinates.
-3. Choose **OnRobot RG2** or **Arduino gripper** from the **Gripper** dropdown.
-   Both drivers remain available and can be switched between tests.
-4. Set the gripper's values. RG2 uses open/grip widths and gripping force;
-   Arduino uses its serial port, tight/loose command and both pads' calibrated
-   grip/release thresholds.
-5. Expand **Force, approach & grasp offset** to adjust the approach heights,
-   contact/command forces, descent limits/speeds, loaded lift, retract distance,
-   earlier-contact backoff and base-frame XYZ grasp offset.
-6. Click **Preview cycle**, review the selected poses, gripper and parameters,
-   then click **Run one cycle**. Changing settings requires another preview.
-
-The six-stage progress strip shows home/open, pick approach, force search,
-offset/grip, verify/lift/home, and force-place/retract. Each run consumes its
-preview and performs exactly one cycle. Manual movement and pose recording
-are blocked during a cycle. The persistent **Stop motion** button cancels the
-sequence, stops active force mode or an arm move, and blocks subsequent steps.
-It does not open the gripper or command a recovery move. A lost UI heartbeat
-also cancels the sequence. The robot connection remains available after a
-normal cancellation; inspect the robot and gripper before testing again.
-Gripper communication is bounded by its configured timeout, so cancellation
-can wait for an outstanding jaw/status reply. This is not an emergency stop.
-
-**Camera target (optional)** accepts a pasted or loaded JSON six-number TCP
-pose in base-frame metres/radians. A supplied camera target overrides the saved
-pick pose. Detector/calibration processing still belongs to your camera app.
-The test choices are saved in `data/live/sequence.json` (or `data/demo/sequence.json`).
-Starting with `--config pick_place.json` initializes the recipe's other defaults.
-
-To try the complete button flow without hardware:
-
-```bash
-./start.sh --demo
-```
-
-Click **Connect RTDE**, **Load demo poses**, **Preview cycle**, then **Run one
-cycle**. Demo mode simulates both the robot and selected gripper and never
-contacts robot or gripper hardware. The force search is accelerated in the
-demo. Live sequence motion still requires validation on your actual cell.
-
-### Record and recall poses
-
-The UI shows live base-frame TCP position, rotation-vector orientation and all
-six joint angles. To teach a position:
-
-1. Connect, then position the TCP using the hold-to-move buttons or absolute target.
-2. Wait for motion to finish, enter a name such as `home_a`, and click
-   **Record current pose**.
-3. To replace a waypoint, move to the new position and click **Update from current**
-   on its saved card, or enter the same name and click **Update saved waypoint**.
-   This updates both TCP coordinates and joint angles, keeping its ID and name.
-   Updates require fresh feedback and a stationary robot. Preview any sequence again
-   after updating its waypoints. Use **Rename** to change a name; names must be unique.
-4. **Load target** fills the absolute target fields without moving anything.
-   **Move TCP** recalls the saved TCP pose with `moveL`; **Move joints** recalls
-   its recorded joint angles with `moveJ`.
-
-Records are saved immediately and atomically to `data/live/poses.json`, with
-TCP coordinates in metres/radians, joint angles in radians, a timestamp and the
-robot address. **Export JSON** downloads the same portable store. Files persist
-across restarts. Demo records live in `data/demo/poses.json` and cannot be used
-for live motion. Use `--data-dir PATH` to choose a different storage directory.
-
-### TCP movement controls
-
-- Hold a position button to jog continuously along robot-base X, Y or Z.
-  Release to stop. The movement speed slider is in mm/s, up to the configured TCP speed limit
-  (maximum 100 mm/s). Jogging starts at 20 mm/s, or the configured limit if lower.
-- Orientation buttons compose a physical rotation about robot-base X, Y or Z,
-  at the selected deg/s; they do not add Euler angles to the rotation-vector components.
-- Hold with a mouse, touch, or Space/Enter on a focused button. Orientation
-  speed slider starts at 5 deg/s and is adjustable up to 10 deg/s. Release, lost focus, navigation, or a
-  missing held-button heartbeat stops jogging. The backend checks workspace
-  and robot safety limits ahead of motion; other moves are blocked while jogging.
-  A continuous hold is limited to 120 seconds; release and press again to resume.
-- The absolute target accepts XYZ in mm and Rx/Ry/Rz **rotation-vector
-  components in degrees**, not roll/pitch/yaw. **Use current** copies live
-  feedback. **Move to TCP target** sends the explicit linear movement.
-- **Stop motion** interrupts an asynchronous movement through RTDE. Closing
-  the backend stops its motion and control script; losing fresh robot feedback
-  or the UI heartbeat stops motion and disconnects. Keep the tab active during
-  movement. This is a software stop, not an emergency-stop function.
-
-Expand **Connection & motion limits** while disconnected to set TCP/joint
-speeds and XYZ workspace limits. Defaults are 20 mm/s TCP and 0.1 rad/s joint
-speed. Limits must cover the actual current TCP pose and every requested
-endpoint. The robot's own reachability/safety checks also run before movement;
-whole-link collisions and intermediate joint trajectories are not validated.
-
-### Use taught poses in the pick/place CLI
-
-Disconnect Robot Bench before running a pick/place job so the CLI can own the
-RTDE control connection. Recorded names can replace the recipe's coordinates:
-
-```bash
-./start.sh pick-place --config pick_place.json \
-  --home-pose home_a --pick-pose pick --place-pose drop --dry-run
-
-# Add --execute instead of --dry-run after reviewing the configured job.
-```
-
-`--home-pose` uses saved joint angles; `--pick-pose` and `--place-pose` use saved
-TCP coordinates. The default `--pose-store` is `data/live/poses.json`.
-`--pick-pose-file target.json` can still override the pick TCP pose with a new
-camera-derived target. Preview can inspect demo records via `--pose-store`,
-but live execution rejects records marked as demo.
-
-## Install
-
-Use Python 3.12 for hardware operation (validated dependency installation).
-Offline planning requires Python 3.10 or newer. Newer interpreters can require
-building `ur_rtde` from source, including CMake and a C++ toolchain.
-
-```bash
-git clone https://github.com/takiihor/ur-pick-place.git
-cd ur-pick-place
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[hardware]'
-```
-
-Use `pip install -e .` for offline planning/tests only, `.[robot]` for RG2 plus
-RTDE, or `.[hardware]` for RTDE plus Arduino serial support. RG2 XML-RPC uses the
-Python standard library. Installation does not connect hardware.
-
-## Configure and preview
-
-```bash
-cp examples/rg2.json pick_place.json
-# Arduino users: copy examples/arduino.json instead.
-# Edit robot_ip, home_joints, poses, workspace, and gripper settings.
-ur-pick-place --config pick_place.json --dry-run
-```
-
-**Example coordinates, joint angles, widths and forces are illustrative.**
-Replace them with your cell's values. `home_joints` contains six joint angles
-in radians. Configure TCP and payload on the robot before running; the package
-does not infer or change them. Use remote control mode as required by your UR
-controller and disconnect competing robot-control applications.
-
-A pose is `[x, y, z, rx, ry, rz]`: translation in **metres**, orientation as a
-**rotation vector in radians**, all expressed in the **robot base frame**.
-These are TCP target poses, not raw marker poses or roll/pitch/yaw angles.
-
-Preview opens no robot or gripper connections. It checks the configured XYZ
-workspace envelope, including possible grasp offsets, lifts and retracts. Live
-execution additionally checks home joint limits and candidate Cartesian poses
-through the robot controller. These checks do not establish collision-free
-paths, tool clearance, or a safe joint path through the scene.
-
-## Run the sequence
-
-After configuring and reviewing the recipe:
-
-```bash
-ur-pick-place --config pick_place.json --execute --cycles 1
-```
-
-Or use `python -m ur_pick_place` with the same arguments. Omitting `--execute`
-previews only. `--cycles N` repeats the same target N times; a failure stops
-subsequent cycles. `--cycle-wait-s 2` sets the pause between successful cycles.
-`return_home` optionally adds a final joint home move after retracting.
-
-No robot motion is performed by package imports or previews. Live execution
-connects an RTDE control session, which uploads its control script. Robot moves
-are synchronous: Ctrl+C may be handled only after a move completes. This CLI
-is not an emergency stop. Probe endpoints and workspace checks are software
-limits; controller/network delays can produce stopping overshoot. Errors do
-not trigger automatic release or recovery moves. Connection cleanup attempts
-to stop active force mode and the RTDE script without opening the jaws.
-
-## Camera integration
-
-For the built-in wrist-camera path, see
-[Wrist-camera vision targeting](#wrist-camera-vision-targeting). An external vision
-application must instead transform its marker observation into a desired
-TCP grasp pose in the robot base frame. This requires camera/robot calibration,
-marker-to-grasp translation and orientation, and the correct configured TCP.
-Marker image pixels or a camera-frame position alone are insufficient.
-
-Write the resulting six-number array to a JSON file, for example:
-
-```json
-[0.4, -0.1, 0.25, 0.0, 3.141592653589793, 0.0]
-```
-
-Then preview or execute with that target:
-
-```bash
-ur-pick-place --config pick_place.json --pick-pose-file target.json
-ur-pick-place --config pick_place.json --pick-pose-file target.json --execute
-```
-
-The CLI reads the target file once. For a new observation on each cycle, use
-Python and call `run()` separately with each newly calibrated target:
-
-```python
-from ur_pick_place import Recipe, connect
-
-recipe = Recipe.load('pick_place.json')
-# Replace this with the output of your calibrated camera application.
-pick_tcp_pose_in_base = [0.4, -0.1, 0.25, 0.0, 3.141592653589793, 0.0]
-
-with connect(recipe) as controller:  # LIVE robot/gripper connection
-    controller.run(pick_pose=pick_tcp_pose_in_base, cycles=1)
-```
-
-Every `run()` validates its target and preflights its envelope before moving.
-The caller must let exceptions stop the job rather than automatically retrying
-or continuing to another target.
-
-## Grasp offset and search settings
-
-Edit these JSON settings:
-
-```json
-{
-  "pick_backoff_mm": 50,
-  "grasp_offset_mm": [0, 0, 10],
-  "lift_mm": 100
-}
-```
-
-`grasp_offset_mm` is an additional XYZ translation in **millimetres along robot
-base axes**, applied in position mode after force mode stops. Positive Z goes
-up; negative Z goes down. Orientation is unchanged. For a contact above the
-pick endpoint, the controller first adds `pick_backoff_mm` along base +Z and
-then the grasp offset. At the pick endpoint it applies the grasp offset without
-a contact backoff. Set `pick_backoff_mm` to zero if only the explicit offset is
-wanted. The loaded lift begins at the resulting grasp pose.
-
-`pick_pose` sets the nominal grasp reference and the lowest pick-search endpoint.
-`pick_approach_mm` sets the vertical approach above it. A smaller
-`pick_probe.max_descent_mm` can exhaust the search before reaching the endpoint;
-that aborts instead of gripping. Earlier contact is accepted only above the
-endpoint. Placement always requires force contact; reaching its travel budget
-without contact blocks release. `place_pose` sets placement XY/orientation and
-approach reference height; release happens at the measured contact pose.
-
-`pick_probe` and `place_probe` each accept:
-
-| Setting | Unit | Meaning |
-| --- | --- | --- |
-| `contact_force_n` | N | Absolute change in base-frame Fz that counts as contact |
-| `command_force_n` | N | Downward commanded force magnitude |
-| `speed_mm_s` | mm/s | Compliant Z speed limit |
-| `max_descent_mm` | mm | Maximum search travel from the actual approach |
-| `timeout_s` | s | Maximum probing time after baseline acquisition |
-| `lateral_tolerance_mm` | mm | Allowed lateral drift (default 5) |
-| `rotation_tolerance_rad` | rad | Allowed orientation drift (default 0.1) |
-
-Before each probe the backend zeros the F/T sensor, waits, and averages a
-baseline. It refreshes `forceMode` at 125 Hz using `initPeriod`/`waitPeriod`,
-following the [ur_rtde force-mode pattern](https://sdurobotics.gitlab.io/ur_rtde/pages/examples/force_torque_control/forcemode_example.html).
-It monitors force, pose, RTDE timestamp progress, safety mode, drift, travel and
-timeout. These software checks are not safety-rated. Force mode must stop
-successfully before any grip/release or subsequent position move.
-
-## RG2
-
-`examples/rg2.json` configures the OnRobot XML-RPC service (robot IP, port 41414,
-tool index 0 by default). Set `gripper.host` if it differs from the robot IP.
-Opening requires target width and no grip feedback; closing requires positive
-grip detection. Jaw widths are mm; jaw force is N. The RG2 S1/S2 interlock is
-checked during picking by a separate monitor so XML-RPC requests do not block
-the RTDE force update loop. Safety faults are reported, never automatically
-cleared or treated as pick contact.
-
-## Arduino gripper
-
-The original firmware is in `firmware/arduino_gripper.ino`; its protocol is:
-
-| Command | Reply | Action |
-| --- | --- | --- |
-| `1\n` | `Tight` | Servo angles 115/90 degrees |
-| `2\n` | `Loose` | Servo angles 90/123 degrees |
-| `3\n` | `Open` | Servo angles 40/165 degrees |
-| `0\n` | `FSR1:... / FSR2:...` | Read both pads |
-
-Serial is 9600 baud, 8N1. Use the appropriate physical connection; for RS485,
-use an adapter with automatic transmit-direction control. The firmware controls
-its own direction using pin 5; the driver does not set host RTS direction.
-Opening a serial connection can reset the Arduino; `startup_wait_s` defaults
-to 2 seconds. Replies acknowledge commands, not completed motion.
-
-```bash
-arduino-gripper ports
-arduino-gripper --port /dev/ttyUSB0 pressure
-arduino-gripper --port /dev/ttyUSB0 open
-arduino-gripper --port /dev/ttyUSB0 tight
-```
-
-Each pad value is the **sum of three raw ADC samples (0..3069)**, not force in N.
-Measure empty/open and securely held-object readings with your installed pads,
-then configure both `grip_min_raw` and `release_max_raw` in the Arduino recipe.
-Its example uses `null` thresholds so hardware sequence execution is blocked
-until you supply measured calibration. Larger readings must indicate stronger
-pressure for this threshold model; validate your sensor wiring accordingly.
-
-Both pads must exceed their grip thresholds on every configured
-`pressure_samples` reading before lifting. Both must fall below their release
-thresholds before retracting. Set `settle_s` to allow mechanical motion before
-sampling. Set `grip_command` to `tight` or `loose`. The Arduino firmware has no
-RG2 safety-switch or calibrated width/force feedback; pressure thresholds are
-an application check and cannot prove a physically secure grasp.
-
-## Development
-
-```bash
-pip install -e .
-python -m unittest discover -s tests -v
-```
-
-Tests use fake RTDE/serial hardware and a local XML-RPC server. They cover
-sequence order, camera target validation, grasp offsets, early contact,
-force refresh/stop failures, travel limits, stale feedback, grip/release
-failures, repeats, and both gripper protocols. No hardware motion has been
-validated in this standalone package.
-
-The RG2 driver, Arduino driver and firmware were extracted from the user's
-`Universal_Robot_External_GUI` project; sequencing and direct RTDE integration
-are standalone implementations. The GUI repository is not needed at runtime.
-
-
-## Wrist-camera vision targeting
-
-`ur-vision` adds `observe`, `teach-grasp` and `vision-pick` to the existing force-guided
-cycle. It supports a standalone ArUco marker or a ChArUco board on the object, plus an
-optional marker-defined placement fixture. This path is CLI-only; the UI can accept
-its exported six-number pick target through **Camera target**.
-
-**Status:** validated with rendered images and fake RTDE/grippers. It has not run on
-a physical UR10e, RealSense or URSim. Complete the hand-eye calibration's first
-`collect --dry-run`, then collect slowly with a hand on the e-stop. Validate the
-pick/place views and paths at reduced speed with the same attendance.
-
-### Setup chain
-
-1. **Print targets** with `charuco-generator`: tank-label ArUco markers (DICT_5X5_100,
-   30 mm, IDs 1-20) or the `front`/`rear` ChArUco boards. Measure the printed size;
-   mount them flat with their white quiet zone clear.
-2. **Hand-eye calibrate** the wrist camera with `ur10e-handeye` (eye-in-hand, its A4
-   DICT_6X6_250 board). Use the TCP you will pick with and keep the camera profile
-   (1280x720) unchanged afterwards; a verdict of `poor` is refused.
-3. **Teach** each target once: `observe` (saved), jog to the grasp, `teach-grasp`.
-4. **Run**: `vision-pick` preview, review, then `--execute --preview FILE`.
-
-Re-teach after recalibrating hand-eye, changing the TCP, the observe joints or the
-refine setting; each is detected and refused. A changed camera profile is refused
-through the intrinsics check. A moved camera mount is caught only once you
-recalibrate (the calibration hash changes), so recalibrate after any mount change.
-When the hand-eye file contains fitted intrinsics, live SDK intrinsics are checked
-against the original factory profile saved in `camera.intrinsics`; pose estimation
-still uses the fitted `intrinsics`. Older files without a recorded factory profile
-are checked against their calibrated intrinsics.
-
-### Install and configure
-
-Use Python 3.11-3.13 (3.12 recommended) and keep `charuco-generator`,
-`charuco-realsense` and `ur10e-handeye` beside this repository. The launcher installs
-vision dependencies and the first two sibling packages editable with `--no-deps`
-to avoid installing conflicting OpenCV distributions. Manual equivalent:
-
-```sh
-.venv/bin/python -m pip install -e '.[hardware,vision]'
-.venv/bin/python -m pip install --no-deps -e ../charuco-generator -e ../charuco-realsense
-cp examples/rg2.json pick_place.json
-cp examples/vision-aruco.json vision.json
-# Or copy examples/vision-charuco.json for the generated front board.
-```
-
-Edit both copies for your cell. The example joint coordinates are placeholders,
-not taught viewpoints. Record an observe waypoint with Robot Bench, disconnect its
-RTDE control session, then use `--observe-pose NAME` or copy its joints into
-`pick.observe_joints`. Use the actual gripper TCP and payload. Set
-`robot.active_tcp_offset` to the TCP offset recorded in the hand-eye result for
-read-only observation, or pass its six values with `--active-tcp`.
-
-Paths inside `vision.json` are relative to that file. `handeye_calibration` reads
-schema 1 from `ur10e-handeye`; unknown versions, inconsistent transforms and `poor`
-verdicts are refused. The example requires camera translation 1-sigma <= 0.5 mm on
-every axis and reprojection RMSE <= 1 px. Set these to your validated tolerances.
-`max_handeye_loo_mm` is available as an additional check, but leave-one-out is
-optimistic for camera mount error; quote `camera_translation_sigma_mm` instead.
-
-ArUco marker sizes refer to the black outer square, excluding the white quiet zone.
-An `aruco_manifest` can supply and check the size/dictionary. ChArUco targets use
-`board_manifest` and `board`, including board geometry and ID checks. Keep a white
-quiet zone around each target and enough image resolution (default >= 5 px/module).
-
-### Observe and teach the relationship
-
-Start with a read-only view from the current robot pose:
-
-```sh
-./start.sh vision observe --config pick_place.json --vision vision.json \
-  --save data/live/pick-observation.json
-```
-
-This opens RTDE receive and the camera. It checks the declared TCP against the
-calibration and nominal UR10e kinematics, rejects motion during capture, averages
-accepted corners and reports pose, resolution, jitter and fit quality. Control
-sessions recover the flange with the controller's calibrated FK and a zero TCP,
-so changing the active TCP does not change the camera-in-flange transform.
-
-To observe from the configured joints, add `--execute` (robot moves). A role's
-optional `refine.enabled` adds a closer frontal view, bounded by translation and
-rotation limits. Use the same procedure for teaching and execution. Refined grasps
-store the marker-relative camera viewpoint so execution can reproduce it.
-
-Keep the object fixed after saving the observation. Jog/hand-guide to the desired
-pick endpoint, save a live waypoint named `Pick grasp`, then disconnect Robot Bench:
-
-```sh
-./start.sh vision teach-grasp --vision vision.json \
-  --observation data/live/pick-observation.json --grasp-pose 'Pick grasp'
-```
-
-Alternatively use `--grasp-tcp X Y Z RX RY RZ` (base metres/radians), or
-`--from-robot --config pick_place.json` for a receive-only TCP read. Keep the same
-TCP throughout observation and teaching. Teaching writes `grasp_pick.json` and
-refuses overwrite unless `--force` is explicit. The marker-to-TCP relation is
-`inv(T_base_marker_taught) @ T_base_tcp_taught`.
-
-A `place` object in `vision.json` has the same structure as `pick`; give it another
-marker/board, observe joints and `grasp_place.json`, and repeat observe/teach with
-`--role place`. If omitted, placement uses the recipe's fixed `place_pose`.
-
-### Preview and run one cycle
-
-```sh
-# Current pose, read-only; saved observations can preview entirely offline:
-./start.sh vision vision-pick --config pick_place.json --vision vision.json
-# Offline alternative: add --observation pick=data/live/pick-observation.json
-# Add --observation place=FILE as well when a place role is configured.
-
-# Explicit motion to reproduce the observe/refine procedure, without a pick cycle:
-./start.sh vision vision-pick --config pick_place.json --vision vision.json \
-  --observe-motion --preview-out data/live/vision_preview.json
-
-# Review the preview, then execute once (robot and gripper move):
-./start.sh vision vision-pick --config pick_place.json --vision vision.json \
-  --execute --preview data/live/vision_preview.json
-```
-
-A fresh observation must match the preview (default 3 mm / 1 degree, <= 15 minutes
-old). Changed config, recipe, calibration or grasp files invalidate it; each
-preview authorizes one attempt. Read-only previews report when their view procedure
-differs from teaching. Execution requires the taught procedure, matching TCP,
-limited displacement/tilt, workspace/envelope checks and controller safety/IK
-checks. These checks do not establish collision-free paths.
-
-`motion_model: planar` follows XY/yaw while retaining taught height/tilt;
-`full` follows the full measured pose. `offset_mm` is applied in target coordinates
-before the taught relation. The recipe's `grasp_offset_mm` remains a separate
-base-frame offset after force contact. The vision pick pose is the force-search
-endpoint; contact backoff, grasp offset, grip verification and placement still use
-the existing controller. Ctrl+C or errors close the control session without an
-automatic jaw release or recovery move.
-
-`--write-pick-target target.json` exports a six-number base-frame TCP pose for the
-UI's Camera target input. This export does not move hardware.
-
-### Coordinates and taught-grasp math
-
-All poses are in the robot **base** frame, metres and UR rotation vectors (radians).
-`T_a_b` maps coordinates in frame `b` into frame `a`.
-
-| Frame | Origin and axes |
-| --- | --- |
-| Camera optical | Lens centre; X right, Y down, Z forward (RealSense colour stream) |
-| ArUco marker | Marker centre; X right, Y down, Z into the printed surface |
-| ChArUco board | Outer top-left pattern corner; X right, Y down, Z into the board |
-| Flange (tool0) | `getForwardKinematics(q, [0]*6)`, the controller's calibrated kinematics |
-| TCP | Active TCP; pick/place targets and taught grasps are TCP poses |
-
-```text
-T_base_camera = T_base_flange @ camera_in_flange             (hand-eye result)
-T_base_marker = T_base_camera @ T_camera_marker               (multi-frame mean)
-taught:  T_marker_tcp = inv(T_base_marker_taught) @ T_base_tcp_taught
-run:     T_base_tcp   = T_base_marker_now @ Trans(offset_mm) @ T_marker_tcp
-```
-
-Read-only sessions (RTDE receive) use `T_base_flange = getActualTCPPose() @
-inv(tcp_offset)` only when the declared active TCP equals the calibration's
-`camera_in_tcp.tcp_offset`, and cross-check it against nominal UR10e kinematics.
-Hand-eye error enters teaching and execution identically when the marker is seen
-the same way, so it largely cancels in `T_marker_tcp`; the refine view reproduces
-the taught marker-relative viewpoint, which makes the cancellation nearly exact.
-In simulation with a deliberate ~3 mm hand-eye error, grips landed within 0.2-0.8 mm
-from a fixed observe pose and within 0.1 mm with the refine view.
-
-Detection details: ChArUco corners from OpenCV 4.11 `detectBoard` are offset by about
-+0.5 px, so one extra `cornerSubPix` pass (half-window 0.25 x corner spacing, 2-8 px)
-runs before pose estimation. ArUco corners use OpenCV subpixel refinement, then
-straight-line fits to the four outer edges: subpixel corners alone sit 0.15-0.4 px
-inside the true corners, inflating depth by ~0.5-1 %. Marker pose uses
-`SOLVEPNP_IPPE_SQUARE` with Levenberg-Marquardt refinement. Frames are rejected for
-low resolution (px/module), reprojection error, viewing angle, image-border contact
-and edge-fit residual; the averaged set is rejected for corner jitter or per-frame
-pose spread. Every rejection lists the failed gates with measured values.
-
-### Offline validation
-
-```sh
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-Install the vision extra and sibling packages to include all camera tests. Rendered
-ArUco/ChArUco images exercise detection, multi-frame gates, calibrated flange/TCP
-conventions, taught relationships, shifted objects, optional refine views, preview
-consumption, calibration rejection and simulated force-guided pick/place.
-
-### Safety notes and limitations
-
-- Not validated on hardware, URSim or a real RealSense: every result above comes
-  from rendered images and fake RTDE/grippers. Validate at reduced speed with the
-  e-stop at hand.
-- No collision checking: approach, refine and observe moves are checked against
-  the workspace box, controller safety limits and IK, not against the cell.
-- The force descent still runs along base -Z, so taught grasps must keep the tool
-  near vertical (`max_tool_tilt_deg`, default 20).
-- A single small marker gives weaker orientation than a board; near-frontal views
-  can show planar (IPPE) ambiguity. Use `motion_model: planar` for objects resting
-  on a flat support, keep the shift/rotation limits tight, or use a ChArUco board.
-- Accuracy depends on print scale, flatness, lighting and the hand-eye result; the
-  quality gates are operational thresholds, not measurement guarantees.
-
-SIGTERM follows the same interruption/cleanup path as Ctrl+C. Arm moves use
-asynchronous RTDE commands with a completion timeout, feedback checks and target
-arrival checks; the UI borrows the same implementation. Both pick and placement
-force searches use the gripper safety guard. Contact detected beyond the configured
-descent budget is refused.
-
-Vision execution locks a preview before opening RTDE control; concurrent use of
-the same preview is refused. A leftover `.lock` after a process crash requires
-review before removal. Simulated calibration files and demo observe poses are
-refused by motion workflows. A recorded camera serial is selected and checked.
-Observation frames are checked for fresh robot feedback, repeated frame numbers,
-robot movement and TCP changes. Saved observations require finite rigid transforms
-and a consistent camera-to-target chain. `teach-grasp --from-robot` also requires
-a declared active TCP matching the observation's TCP.
+Recipe examples: [RG2](examples/rg2.json), [Arduino](examples/arduino.json),
+[ArUco vision](examples/vision-aruco.json), [ChArUco vision](examples/vision-charuco.json).
+Disconnect Robot Bench before running a CLI job that needs RTDE control.
