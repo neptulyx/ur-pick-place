@@ -59,14 +59,15 @@ if(typeof document!=='undefined')document.addEventListener('DOMContentLoaded',()
   <div class="robot-layout"><div><canvas id="robot-canvas" width="1000" height="620" tabindex="0" aria-label="UR10e, tool, camera, mount and cell preview"></canvas>
   <p class="hint">Keyboard: use arrow keys to rotate the view. Use plus or minus to change the scale.</p>
   <p class="legend">Grey: UR10e. Orange: tool. Blue: camera. Purple: mount. Green: cell.</p>
-  <p>Base coordinates use metres. Joint angles use degrees. The preview shows collision hulls.</p>
+  <p>Box dimensions and positions use millimetres. Box angles and joint angles use degrees.</p>
+  <p>The preview shows collision hulls. The nominal model uses generic UR10e data. It does not include this robot's factory calibration.</p>
   <p id="path-status" role="status">Example joint pose. No path check is loaded.</p>
   <label>Path file <input type="file" id="path-import" accept=".json,application/json"></label>
   <label>Path segment <select id="path-segment" disabled></select></label>
   <label>Position along segment <input id="path-position" type="range" min="0" max="1000" value="0" disabled></label>
   <div id="joint-inputs" class="grid"></div></div>
   <div><h3>Camera, mount and cell</h3><p>The tool box above excludes the camera and mount. These parts use separate boxes.</p><p>Mounting offsets use anobot as a reference. The offsets are unverified starting values.</p>
-  <label>Box <select id="scene-box"></select></label><div id="scene-fields" class="grid"></div>
+  <label>Box <select id="scene-box"></select></label><p id="scene-frame" class="hint" aria-live="polite"></p><div id="scene-fields" class="grid"></div>
   <button id="add-obstacle" type="button">Add cell box</button><button id="remove-obstacle" class="secondary" type="button">Remove cell box</button>
   <label>Clearance (mm) <input id="scene-clearance" type="number" min="0.1" max="100" step="0.1" value="5"></label>
   <label>Model uncertainty (mm) <input id="scene-uncertainty" type="number" min="0.1" max="100" step="0.1" value="3"></label>
@@ -90,7 +91,7 @@ if(typeof document!=='undefined')document.addEventListener('DOMContentLoaded',()
   for(let i=0;i<9;i++){const label=document.createElement('label');label.textContent=fieldKeys[i]+(i<6?' (mm)':' (deg)');const input=document.createElement('input');input.type='number';input.step='.1';input.id='body-'+i;input.addEventListener('input',editBody);label.append(input);bodyInputs.push(input);el('scene-fields').append(label);}
   function selected(){return [...scene.attached,...scene.obstacles].find(b=>b.name===el('scene-box').value);}
   function options(){const previous=el('scene-box').value;el('scene-box').replaceChildren();for(const b of [...scene.attached,...scene.obstacles].filter(b=>b.name!=='tool')){const o=document.createElement('option');o.value=b.name;o.textContent=b.name;el('scene-box').append(o);}if([...el('scene-box').options].some(o=>o.value===previous))el('scene-box').value=previous;showBody();}
-  function showBody(){const b=selected();if(!b)return;bodyValid=true;const v=[...b.dimensions_m.map(x=>x*1000),...b.pose.xyz_m.map(x=>x*1000),...b.pose.rpy_rad.map(x=>x*180/Math.PI)];bodyInputs.forEach((n,i)=>n.value=Number(v[i].toFixed(6)));el('remove-obstacle').disabled=!scene.obstacles.includes(b);}
+  function showBody(){const b=selected();if(!b)return;el('scene-frame').textContent=scene.obstacles.includes(b)?'Cell box pose uses base coordinates.':'Camera and mount poses use tool0 (flange) coordinates.';bodyValid=true;const v=[...b.dimensions_m.map(x=>x*1000),...b.pose.xyz_m.map(x=>x*1000),...b.pose.rpy_rad.map(x=>x*180/Math.PI)];bodyInputs.forEach((n,i)=>n.value=Number(v[i].toFixed(6)));el('remove-obstacle').disabled=!scene.obstacles.includes(b);}
   function changed(){scene.confirmed=false;scene.environment_complete=false;message.textContent='The scene changed. Check the physical model and cell again.';sync();draw();}
   function editBody(){const v=bodyInputs.map(n=>n.value.trim()===''?NaN:Number(n.value)),next=copy(scene),b=[...next.attached,...next.obstacles].find(x=>x.name===selected()?.name);if(!b)return;b.dimensions_m=v.slice(0,3).map(x=>x/1000);b.pose={xyz_m:v.slice(3,6).map(x=>x/1000),rpy_rad:v.slice(6).map(x=>x*Math.PI/180)};try{validateScene(next,UR_MODEL_SHA256);bodyValid=true;scene=next;changed();}catch{bodyValid=false;message.textContent='Enter valid dimensions and offsets. The view keeps the last valid scene.';}}
   function sync(){el('scene-confirmed').checked=scene.confirmed;el('scene-complete').checked=scene.environment_complete;el('scene-clearance').value=scene.clearance_m*1000;el('scene-uncertainty').value=scene.model_uncertainty_m*1000;state.textContent=scene.confirmed&&scene.environment_complete&&scene.obstacles.length?'SCENE RECORDED · PATH CHECK REQUIRED':'AUTOMATIC MOTION BLOCKED';showPathStatus();}

@@ -41,7 +41,12 @@ domReady();
 (async()=>{
   assert.equal(els['scene-state'].textContent,'AUTOMATIC MOTION BLOCKED');
   assert.equal(els.yaw.value,'90');
+  assert.match(els['scene-frame'].textContent,/tool0 \(flange\)/);
+  els['scene-box'].value='mount';await els['scene-box'].dispatchEvent({type:'change'});assert.match(els['scene-frame'].textContent,/tool0 \(flange\)/);
   await els['add-obstacle'].click();assert.equal(els['scene-box'].value,'obstacle_1');
+  assert.match(els['scene-frame'].textContent,/base coordinates/);
+  els['scene-box'].value='camera';await els['scene-box'].dispatchEvent({type:'change'});assert.match(els['scene-frame'].textContent,/tool0 \(flange\)/);
+  els['scene-box'].value='obstacle_1';await els['scene-box'].dispatchEvent({type:'change'});
   await els['scene-export'].click();assert.equal(downloads.at(-1),'collision-scene.json');
   const count=downloads.length;els['body-0'].value='';await els['body-0'].dispatchEvent({type:'input'});await els['scene-export'].click();assert.equal(downloads.length,count);
   els['body-0'].value='200';await els['body-0'].dispatchEvent({type:'input'});

@@ -2,7 +2,7 @@
 
 - Done in this local review: UR10e arm preview, separate editable tool/camera/mount boxes, cell boxes and saved joint-path review.
 - Done in the hand-eye review: original 25/30 degree controls, conservative checks for probes/views/replans/returns, recorded results and runtime checks before each joint command. The default scene blocks automatic motion.
-- Done offline: Firefox reviewed the teacher and calibration editors with an inert service. Open: coordinator review, robot-specific geometry and uncertainty verification, measured cell coverage, tracking/path-fidelity validation and an attended hardware trial. Nothing in this local follow-up is published or deployed.
+- Done offline: The editor labels tool0 and base box frames and identifies the generic robot model. Firefox reviewed the teacher and calibration editors with an inert service. Open: coordinator review, robot-specific geometry and uncertainty verification, measured cell coverage, tracking/path-fidelity validation and an attended hardware trial. Nothing in this local follow-up is published or deployed.
 - Open in Marker Pick Teacher: integrate actual Cartesian stages and return-to-observation with a suitable path validator. Its new panel is visual only.
 - Read [the implementation guide](docs/COLLISION_REVIEW.md).
 

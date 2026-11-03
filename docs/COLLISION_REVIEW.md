@@ -21,6 +21,11 @@ This image is a generated geometry view. It is not a browser screenshot.
 7. Enter the measured model uncertainty and required clearance.
 8. Export the collision scene to a new JSON file.
 
+Box dimensions and positions use millimetres. Box and joint angles use degrees.
+The tool, camera and mount poses use tool0 (flange) coordinates. Cell box poses
+use base coordinates. The arm model uses generic UR10e data. It does not include
+this robot’s factory calibration.
+
 Joint fields change the displayed pose only. They do not send robot commands.
 The canvas also supports arrow keys and plus/minus keys. A saved calibration
 `session.json` displays its joint segments, including returns. A checked-plan
@@ -137,7 +142,7 @@ and return paths pass in the example model. The example scene remains unconfirme
 
 Node tests exercise the editor scripts with a DOM double. A headless Firefox review
 exercised the local calibration file and the teacher HTTP editor with an inert service.
-The review covered scene and joint edits, view controls, import/export, invalid input,
+The review covered frame labels, scene and joint edits, view controls, import/export, invalid input,
 confirmation reset, saved paths and stage selection. The screenshot below is from
 that browser review. No attended hardware trial occurred.
 

@@ -2,7 +2,7 @@
 
 ## UR10e model and calibration collision review
 
-The editor now shows the nominal UR10e, the tool box, and separate camera and mount boxes. It supports joint-pose changes, cell boxes and saved-path review. Read the [detailed review guide](docs/COLLISION_REVIEW.md).
+The editor now shows the nominal UR10e, the tool box, and separate camera and mount boxes. It supports joint-pose changes, cell boxes and saved-path review. Box fields identify the tool0 or base frame. The generic model does not include this robot’s factory calibration. Read the [detailed review guide](docs/COLLISION_REVIEW.md).
 
 ![Generated nominal UR10e geometry](docs/robot-tool-preview.svg)
 
