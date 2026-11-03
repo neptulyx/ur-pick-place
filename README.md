@@ -1,5 +1,14 @@
 # ur-pick-place
 
+## UR10e model and calibration collision review
+
+The editor now shows the nominal UR10e, the tool box, and separate camera and mount boxes. It supports joint-pose changes, cell boxes and saved-path review. Read the [detailed review guide](docs/COLLISION_REVIEW.md).
+
+![Generated nominal UR10e geometry](docs/robot-tool-preview.svg)
+
+This is a generated geometry view, not a browser screenshot. Teacher motion remains unchanged. Its Cartesian stages and observation return do not use the calibration checker. The preview and scene confirmation are not safety certifications. Native UR tool and safety settings are not configured.
+
+
 Teach waypoints and run force-guided pick-and-place cycles on a Universal Robots
 arm with an OnRobot RG2 or Arduino gripper. An optional camera UI teaches a pick
 position relative to an ArUco marker or ChArUco board.
@@ -13,11 +22,11 @@ position relative to an ArUco marker or ChArUco board.
 
 ![Illustrative draft tool box editor](docs/tool-envelope.png)
 
-In Marker Pick Teacher setup, choose **Open tool box draft**. The offline editor also works by opening the packaged `web/tool-envelope.html` file directly alongside its `.css` and `.js` files; no robot, camera or project is needed. The 390 × 80 × 100 mm example and centre (0, 0, 50) mm are illustrative, not measurements. The flange axes, orientation and camera/mount coverage remain unconfirmed. The top-centre preset places the flange at the local negative-Z face centre. The dashed margin expands each box face.
+In Marker Pick Teacher setup, choose **Open tool box draft**. The offline editor also works by opening the packaged `web/tool-envelope.html` file directly alongside its `.css` and `.js` files; no robot, camera or project is needed. The 390 × 80 × 100 mm example and centre (0, 0, 50) mm are illustrative, not measurements. The mounting orientation remains unverified. The tool excludes the separate camera and mount. The top-centre preset places the flange at the local negative-Z face centre. The dashed margin expands each box face.
 
 Import/export uses a portable JSON object with exactly `version: 1`, `type: "tool_bounding_box"`, `frame: "tool0"`, `dimensions_m` (three full extents along the box-local X, Y and Z axes), `pose_in_flange` with `xyz_m` and `rpy_rad` (roll, pitch, yaw; Rz(yaw) × Ry(pitch) × Rx(roll)), `clearance_m`, `assembly_coverage` (`unconfirmed`, `tool-only`, or `includes-camera-mount`), `status: "draft"`, and `purpose: "visualization_only"`. RPY is not a UR rotation vector. Input bounds are shown in the editor. Files contain no robot settings or project data.
 
-This is a sketch, not a collision check or motion setting. UR native tool spheres and safety planes are a separate layer; they do not perform oriented-box swept-path checking or establish tool-to-wrist clearance. Calibration, teacher and return-motion collision integration remain TODO.
+The tool-only JSON remains a visualization draft. Calibration uses the separate collision-scene format described above. Teacher motion integration remains open. Native UR tool spheres and safety planes remain a separate layer.
 
 ## 1. Try Robot Bench without hardware
 

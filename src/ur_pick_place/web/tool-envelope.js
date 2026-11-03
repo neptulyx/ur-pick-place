@@ -28,7 +28,7 @@ if(typeof module!=='undefined') module.exports={profile,parseProfile,rotate,corn
 if(typeof document!=='undefined'){
  const el=id=>document.getElementById(id),message=el('message');let last=defaults.slice();
  function read(){return keys.map(id=>{let s=el(id).value.trim();return s===''?NaN:Number(s)});}
- function update(){try{let v=read();validateValues(v,el('coverage').value);last=v;for(let view of ['iso','top','front','side'])el(view).innerHTML=render(v,view);message.textContent='';return true}catch(e){message.textContent=e.message+' The view keeps the last valid tool box.';return false}}
+ function update(){try{let v=read();validateValues(v,el('coverage').value);last=v;for(let view of ['iso','top','front','side'])el(view).innerHTML=render(v,view);message.textContent='';document.dispatchEvent(new CustomEvent('tool-box-change',{detail:profile(v,el('coverage').value)}));return true}catch(e){message.textContent=e.message+' The view keeps the last valid tool box.';return false}}
  function set(v,c){keys.forEach((k,i)=>el(k).value=v[i]);el('coverage').value=c;update()}
  keys.forEach(k=>el(k).addEventListener('input',update));el('coverage').addEventListener('change',update);
  el('reset').addEventListener('click',()=>set(defaults,'unconfirmed'));

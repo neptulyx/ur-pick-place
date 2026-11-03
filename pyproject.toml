@@ -31,4 +31,4 @@ ur-vision = "ur_pick_place.vision.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ur_pick_place = ["web/*.html", "web/*.css", "web/*.js"]
+ur_pick_place = ["web/*.html", "web/*.css", "web/*.js", "web/*.json", "web/*.txt"]

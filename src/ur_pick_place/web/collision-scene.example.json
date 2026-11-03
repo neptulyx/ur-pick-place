@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "type": "ur10e_collision_scene",
+  "frame": "base",
+  "model_sha256": "2e08dd5f17bd397a31eb9a17a0a2d2526c5b6187dea280dd6070ca84fda3e094",
+  "confirmed": false,
+  "environment_complete": false,
+  "clearance_m": 0.005,
+  "model_uncertainty_m": 0.003,
+  "attached": [
+    {
+      "name": "tool",
+      "dimensions_m": [
+        0.39,
+        0.08,
+        0.1
+      ],
+      "pose": {
+        "xyz_m": [
+          0,
+          0,
+          0.05
+        ],
+        "rpy_rad": [
+          0,
+          0,
+          1.5707963267948966
+        ]
+      }
+    },
+    {
+      "name": "camera",
+      "dimensions_m": [
+        0.02505,
+        0.09,
+        0.025
+      ],
+      "pose": {
+        "xyz_m": [
+          0.0861,
+          0.004540346491019814,
+          0.017099671174355867
+        ],
+        "rpy_rad": [
+          1.5707963267948966,
+          -0.917868653623818,
+          -1.5707963267948966
+        ]
+      }
+    },
+    {
+      "name": "mount",
+      "dimensions_m": [
+        0.07500200298023224,
+        0.13456261482429505,
+        0.013962949610918759
+      ],
+      "pose": {
+        "xyz_m": [
+          0.0,
+          -0.029780305922031403,
+          0.003980474779382348
+        ],
+        "rpy_rad": [
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "obstacles": [],
+  "notes": "Unverified starting model. Tool excludes camera and mount. Cables and cell are not measured."
+}

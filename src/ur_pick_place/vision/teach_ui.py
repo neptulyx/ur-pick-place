@@ -396,6 +396,9 @@ class Handler(BaseHTTPRequestHandler):
                   '/tool-envelope.html': ('tool-envelope.html', 'text/html; charset=utf-8'),
                   '/tool-envelope.js': ('tool-envelope.js', 'text/javascript; charset=utf-8'),
                   '/tool-envelope.css': ('tool-envelope.css', 'text/css; charset=utf-8'),
+                  '/robot-preview.js': ('robot-preview.js', 'text/javascript; charset=utf-8'),
+                  '/ur10e-model.js': ('ur10e-model.js', 'text/javascript; charset=utf-8'),
+                  '/UR-MODEL-NOTICE.txt': ('UR-MODEL-NOTICE.txt', 'text/plain; charset=utf-8'),
                   '/teacher.js': ('teacher.js', 'text/javascript; charset=utf-8'),
                   '/teacher.css': ('teacher.css', 'text/css; charset=utf-8')}
         if path not in assets:
