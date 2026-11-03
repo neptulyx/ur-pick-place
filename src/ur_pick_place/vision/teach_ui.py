@@ -393,6 +393,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(read_json(file), filename=name)
                 return self.reply(file.read_bytes(), mime='text/plain; charset=utf-8', filename=name)
         assets = {'/': ('teacher.html', 'text/html; charset=utf-8'),
+                  '/tool-envelope.html': ('tool-envelope.html', 'text/html; charset=utf-8'),
+                  '/tool-envelope.js': ('tool-envelope.js', 'text/javascript; charset=utf-8'),
+                  '/tool-envelope.css': ('tool-envelope.css', 'text/css; charset=utf-8'),
                   '/teacher.js': ('teacher.js', 'text/javascript; charset=utf-8'),
                   '/teacher.css': ('teacher.css', 'text/css; charset=utf-8')}
         if path not in assets:

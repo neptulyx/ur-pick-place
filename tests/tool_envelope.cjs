@@ -1,0 +1,26 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const js = fs.readFileSync(path.join(__dirname, '../src/ur_pick_place/web/tool-envelope.js'), 'utf8');
+const moduleBox = {exports:{}};
+vm.runInNewContext(js, {module:moduleBox});
+const {profile,parseProfile,corners,render} = moduleBox.exports;
+const plain = x => JSON.parse(JSON.stringify(x));
+let v = [2,4,6,10,20,30,0,0,90,1];
+let points = plain(corners(v));
+let expected = [[12,19,27],[12,19,33],[8,19,27],[8,19,33],[12,21,27],[12,21,33],[8,21,27],[8,21,33]];
+points.forEach((p,i)=>p.forEach((n,j)=>assert.ok(Math.abs(n-expected[i][j])<1e-10)));
+let margin = plain(corners(v,1));
+assert.ok(Math.abs(margin[0][0]-13)<1e-10 && Math.abs(margin[0][1]-18)<1e-10 && margin[0][2]===26);
+let p = plain(profile(v,'includes-camera-mount'));
+let roundtrip = parseProfile(p); roundtrip.values.forEach((n,i)=>assert.ok(Math.abs(n-v[i])<1e-10));
+assert.equal(roundtrip.coverage, 'includes-camera-mount');
+for(const mutate of [p=>p.status='approved', p=>p.frame='base', p=>p.extra=true, p=>p.dimensions_m[0]=0, p=>p.clearance_m=null, p=>p.pose_in_flange.rpy_rad[0]=Infinity]) {let bad=structuredClone(p); mutate(bad); assert.throws(()=>parseProfile(bad));}
+assert.match(render(v,'iso'), /flange origin/);
+const ids=['length','width','height','x','y','z','roll','pitch','yaw','margin','coverage','message','iso','top','front','side','reset','preset','export','import'];
+const els=Object.fromEntries(ids.map(id=>[id,{value:'',innerHTML:'',textContent:'',events:{},addEventListener(event,fn){this.events[event]=fn}}]));
+[390,80,100,0,0,50,0,0,0,0].forEach((n,i)=>els[ids[i]].value=String(n));els.coverage.value='unconfirmed';
+const context={document:{getElementById:id=>els[id]},setTimeout,Blob,URL};vm.runInNewContext(js,context);
+(async()=>{const old=els.iso.innerHTML;els.length.value='';els.length.events.input();assert.equal(els.iso.innerHTML,old);assert.match(els.message.textContent,/valid number/);els.length.value='390';els.length.events.input();await els.import.events.change({target:{files:[{size:30,text:async()=>'{"status":"approved"}'}],value:'file'}});assert.equal(els.iso.innerHTML,old);assert.equal(els.length.value,'390');assert.match(els.message.textContent,/editor did not import the file/);await els.import.events.change({target:{files:[{size:2,text:async()=>'{' }],value:'file'}});assert.match(els.message.textContent,/The file is not valid JSON/);assert.equal(els.iso.innerHTML,old);await els.import.events.change({target:{files:[{size:2,text:async()=>{throw Error('browser specific details')}}],value:'file'}});assert.match(els.message.textContent,/The editor could not read the file/);assert.doesNotMatch(els.message.textContent,/browser specific/);assert.equal(els.iso.innerHTML,old);console.log('tool envelope geometry, schema, units and invalid input/import: PASS')})().catch(e=>{console.error(e);process.exitCode=1});

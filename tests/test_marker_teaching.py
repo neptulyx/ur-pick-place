@@ -434,6 +434,12 @@ class MarkerTeachingTests(unittest.TestCase):
             self.assertIn('Teach the picking position', page)
             self.assertIn('aria-label="Teaching steps"', page)
             self.assertIn(server.token, page)
+            self.assertIn('href="/tool-envelope.html"', page)
+        for asset, content in (('html', b'DRAFT'), ('js', b'parseProfile'), ('css', b'.views')):
+            with urlopen(url+'/tool-envelope.'+asset) as r:
+                self.assertIn(content, r.read())
+                self.assertIn("script-src 'self'", r.headers['Content-Security-Policy'])
+                self.assertNotIn('unsafe-inline', r.headers['Content-Security-Policy'])
         req = Request(url+'/api/configure', data=json.dumps(dict(self.settings, tcp_confirmed=True)).encode(),
                       headers={'Content-Type':'application/json'}, method='POST')
         with self.assertRaises(HTTPError) as caught:

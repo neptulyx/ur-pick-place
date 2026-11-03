@@ -12,6 +12,7 @@
 <div id="message" role="status" aria-live="polite">Choose your camera calibration and marker to begin.</div>
 <div class="workspace"><div class="step-content">
 <section id="step-configure" aria-labelledby="title-configure"><div class="section-heading"><span class="eyebrow">STEP 1 OF 5</span><h2 id="title-configure" tabindex="-1">Connect your setup</h2><p>Choose the calibration and target you will use for this pick.</p></div>
+<p><a href="/tool-envelope.html" target="_blank" rel="noopener">Open tool box draft</a></p>
 <form id="setup" novalidate><div class="fields">
 <label class="wide">Saved hand-eye calibration<input id="calibration" list="calibrations" required placeholder="Path to calibration.json"><datalist id="calibrations"></datalist><small>Maps the selected wrist camera to the robot. Select the printed picking target separately below.</small></label>
 <label>Camera<select id="camera_provider"><option value="realsense">RealSense</option><option value="basler">Basler</option></select></label><label>Robot IP<input id="robot_ip" required placeholder="192.168.12.248"></label><label>Marker type<select id="kind"><option value="charuco">ChArUco board</option><option value="aruco">Single ArUco marker</option></select></label>
